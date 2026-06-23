@@ -14,7 +14,7 @@ const translations = {
     audioTitle: 'Аудиогид',
     fullTextTitle: 'Полная расшифровка текста экскурсии',
     highContrast: 'Высокий контраст',
-    largeText: 'Крупный шрифт',
+    largeText: 'Размер шрифта',
     listen: 'Слушать аудиогид',
     playing: 'Воспроизведение...',
     developedAt: 'Разработано в',
@@ -26,10 +26,10 @@ const translations = {
     adminWaitMessage: 'До начала автоматического сеанса осталось менее 10 минут. Пожалуйста, дождитесь его естественного запуска.',
     enterAdminPin: 'Введите PIN-код администратора для старта:',
     wrongPin: 'Неверный PIN-код.',
-    // НОВЫЕ СТРОКИ ДЛЯ ИИ-ЧАТА
     chatTitle: 'AI-Гид Медресе',
     chatInput: 'Задайте вопрос об истории...',
-    chatWelcome: 'Здравствуйте! Экскурсия завершена. Есть ли у вас вопросы об архитектуре или истории Медресе Улугбека?',
+    chatWelcomeDefault: 'Здравствуйте! Есть ли у вас вопросы об архитектуре или истории Медресе Улугбека?',
+    chatWelcomeAfter: 'Здравствуйте! Экскурсия завершена. Есть ли у вас вопросы об архитектуре или истории Медресе Улугбека?',
     aiTyping: 'ИИ печатает...'
   },
   en: {
@@ -40,7 +40,7 @@ const translations = {
     audioTitle: 'Audio Guide',
     fullTextTitle: 'Full Tour Transcript',
     highContrast: 'High Contrast',
-    largeText: 'Large Text',
+    largeText: 'Font Size',
     listen: 'Listen to Audio Guide',
     playing: 'Playing...',
     developedAt: 'Developed at',
@@ -54,7 +54,8 @@ const translations = {
     wrongPin: 'Incorrect PIN.',
     chatTitle: 'AI Madrasah Guide',
     chatInput: 'Ask a question about the history...',
-    chatWelcome: 'Hello! The tour has ended. Do you have any questions about the architecture or history of the Ulugbek Madrasah?',
+    chatWelcomeDefault: 'Hello! Do you have any questions about the architecture or history of the Ulugbek Madrasah?',
+    chatWelcomeAfter: 'Hello! The tour has ended. Do you have any questions about the architecture or history of the Ulugbek Madrasah?',
     aiTyping: 'AI is typing...'
   },
   uz: {
@@ -65,7 +66,7 @@ const translations = {
     audioTitle: 'Audiogid',
     fullTextTitle: 'Ekskursiyaning toʻliq matni',
     highContrast: 'Yuqori kontrast',
-    largeText: 'Yirik shrift',
+    largeText: 'Shrift oʻlchami',
     listen: 'Audiogidni tinglash',
     playing: 'Ijro etilmoqda...',
     developedAt: 'Ishlab chiqilgan joy:',
@@ -79,7 +80,8 @@ const translations = {
     wrongPin: 'Notoʻgʻri PIN kod.',
     chatTitle: 'AI Madrasa Gidi',
     chatInput: 'Tarix haqida savol bering...',
-    chatWelcome: 'Assalomu alaykum! Ekskursiya yakunlandi. Ulugʻbek madrasasining meʼmorchiligi yoki tarixi haqida savollaringiz bormi?',
+    chatWelcomeDefault: 'Assalomu alaykum! Ulugʻbek madrasasining meʼmorchiligi yoki tarixi haqida savollaringiz bormi?',
+    chatWelcomeAfter: 'Assalomu alaykum! Ekskursiya yakunlandi. Ulugʻbek madrasasining meʼmorchiligi yoki tarixi haqida savollaringiz bormi?',
     aiTyping: 'AI yozmoqda...'
   }
 };
@@ -91,13 +93,15 @@ export default function App() {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(-1);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  
   const [highContrast, setHighContrast] = useState(false);
-  const [largeText, setLargeText] = useState(false);
   
+  // Плавная регулировка шрифта: множитель от 1.0 (обычный) до 2.0 (увеличен вдвое)
+  const [fontScale, setFontScale] = useState(1);
+  const [showFontSlider, setShowFontSlider] = useState(false);
+
   // LIVE СЕАНС И РЕЖИМ АДМИНИСТРАТОРА
   const [isLiveMode, setIsLiveMode] = useState(false);
-  const [isAdminLive, setIsAdminLive] = useState(false); 
+  const [isAdminLive, setIsAdminLive] = useState(false);
   const [liveCountdown, setLiveCountdown] = useState('00:00');
   const [livePoi, setLivePoi] = useState(null);
   const [liveSentenceIndex, setLiveSentenceIndex] = useState(-1);
@@ -110,17 +114,48 @@ export default function App() {
   const [isAiTyping, setIsAiTyping] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   
+  // Координаты для свободного перемещения окна сеанса
+  const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+
   // Рефы
-  const adminTimeRef = useRef(0); 
-  const hasSessionPlayed = useRef(false); // Отслеживает, шел ли сеанс
+  const adminTimeRef = useRef(0);
+  const hasSessionPlayed = useRef(false);
   const audioRef = useRef(null);
   const liveAudioRef = useRef(null);
   const chatEndRef = useRef(null);
   const t = translations[lang];
 
-  // Инициализация приветственного сообщения чата при смене языка
+  // Перемещение окна сеанса (Drag and Drop) через PointerEvents
+  const handleDragStart = (e) => {
+    isDragging.current = true;
+    dragStart.current = { x: e.clientX - sessionPos.x, y: e.clientY - sessionPos.y };
+  };
+
   useEffect(() => {
-    setChatMessages([{ sender: 'ai', text: t.chatWelcome }]);
+    const handleDragMove = (e) => {
+      if (!isDragging.current) return;
+      setSessionPos({
+        x: e.clientX - dragStart.current.x,
+        y: e.clientY - dragStart.current.y
+      });
+    };
+    const handleDragEnd = () => {
+      isDragging.current = false;
+    };
+
+    window.addEventListener('pointermove', handleDragMove);
+    window.addEventListener('pointerup', handleDragEnd);
+    return () => {
+      window.removeEventListener('pointermove', handleDragMove);
+      window.removeEventListener('pointerup', handleDragEnd);
+    };
+  }, [sessionPos]);
+
+  // Инициализация дефолтного приветственного сообщения чата при первом открытии/смене языка
+  useEffect(() => {
+    setChatMessages([{ sender: 'ai', text: t.chatWelcomeDefault }]);
   }, [lang]); // eslint-disable-line
 
   // Автоскролл чата вниз
@@ -163,7 +198,6 @@ export default function App() {
     setChatInput('');
     setIsAiTyping(true);
 
-    // MOCK-ОТВЕТ (Здесь будет запрос к реальному API)
     setTimeout(() => {
       const aiResponse = lang === 'ru' 
         ? 'Я пока работаю в тестовом режиме интерфейса. Скоро меня подключат к базе знаний Медресе!'
@@ -246,10 +280,9 @@ export default function App() {
       setLivePoi(currentActivePoi);
 
       if (currentActivePoi) {
-        hasSessionPlayed.current = true; // Отмечаем, что сеанс идет
+        hasSessionPlayed.current = true;
         setLiveProgress(targetTrackTime);
         setLiveDuration(activeTrackDuration);
-
         if (isLiveMode && liveAudioRef.current) {
           const audioEl = liveAudioRef.current;
           const actualAudioDuration = audioEl.duration || Infinity;
@@ -276,7 +309,6 @@ export default function App() {
           }
         }
         setLiveSentenceIndex(calculatedSentenceIndex);
-
         if (isAdminLive) adminTimeRef.current += 1;
       } else {
         // СЕАНС ЗАВЕРШЕН (или еще не начался)
@@ -287,8 +319,9 @@ export default function App() {
           liveAudioRef.current.pause();
         }
         
-        // Если сеанс только что закончился, открываем чат с ИИ
+        // Если сеанс только что закончился, открываем чат с ИИ и выводим специальное сообщение
         if (hasSessionPlayed.current) {
+          setChatMessages(prev => [...prev, { sender: 'ai', text: t.chatWelcomeAfter }]);
           setIsChatOpen(true);
           hasSessionPlayed.current = false;
         }
@@ -302,7 +335,6 @@ export default function App() {
 
     syncLiveSession();
     const liveInterval = setInterval(syncLiveSession, 1000);
-
     return () => clearInterval(liveInterval);
   }, [isLiveMode, isAdminLive, lang]);
 
@@ -378,7 +410,7 @@ export default function App() {
         audioRef.current.play().catch(() => setIsPlaying(false));
       }
     }
-  }, [selectedPoi, lang]); 
+  }, [selectedPoi, lang]);
 
   // ==========================================
   // СТИЛИ И ТЕМЫ
@@ -393,34 +425,40 @@ export default function App() {
     border: highContrast ? 'border-yellow-400' : 'border-stone-200',
     karaokeActiveBg: highContrast ? 'bg-yellow-400' : 'bg-[#1C3D5A]',
     karaokeActiveText: highContrast ? 'text-black' : 'text-white',
-    // Стили для чата
     chatBubbleUser: highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white',
     chatBubbleAi: highContrast ? 'bg-zinc-800 text-yellow-400 border border-yellow-400' : 'bg-stone-100 text-stone-800 border border-stone-200'
   };
 
+  // Динамические размеры шрифтов на базе CSS-переменной --font-scale.
+  // Это позволяет тексту плавно увеличиваться в зависимости от ползунка
   const tSize = {
-    xs: largeText ? 'text-sm' : 'text-xs',
-    sm: largeText ? 'text-base' : 'text-sm',
-    base: largeText ? 'text-xl leading-relaxed' : 'text-base leading-relaxed',
-    lg: largeText ? 'text-2xl leading-loose' : 'text-lg leading-relaxed',
-    xl: largeText ? 'text-3xl' : 'text-xl',
-    '2xl': largeText ? 'text-4xl' : 'text-2xl',
-    '4xl': largeText ? 'text-5xl md:text-6xl' : 'text-3xl md:text-5xl',
-    svgLabel: largeText ? 'text-[14px]' : 'text-[10px]',
-    svgCompass: largeText ? 'text-[13px]' : 'text-[9px]',
+    xs: 'text-[calc(0.75rem*var(--font-scale))] leading-normal',
+    sm: 'text-[calc(0.875rem*var(--font-scale))] leading-normal',
+    base: 'text-[calc(1rem*var(--font-scale))] leading-relaxed',
+    lg: 'text-[calc(1.125rem*var(--font-scale))] leading-relaxed',
+    xl: 'text-[calc(1.25rem*var(--font-scale))] leading-tight',
+    '2xl': 'text-[calc(1.5rem*var(--font-scale))] leading-tight',
+    '4xl': 'text-[calc(1.875rem*var(--font-scale))] md:text-[calc(3rem*var(--font-scale))] leading-tight',
+    svgLabel: 'text-[calc(10px*var(--font-scale))]',
+    svgCompass: 'text-[calc(9px*var(--font-scale))]',
   };
 
   const getRegionClass = (id) => {
     if (selectedPoi.id === id) return highContrast ? 'fill-yellow-400/40 stroke-yellow-400 stroke-2' : 'fill-[#38bdf8]/30 stroke-[#38bdf8] stroke-2';
     return highContrast ? 'fill-transparent stroke-yellow-400/40 hover:fill-yellow-400/10' : 'fill-transparent stroke-[#475569]/60 hover:fill-[#38bdf8]/10';
   };
+
   const getLabelClass = (id) => {
     if (selectedPoi.id === id) return highContrast ? 'fill-yellow-400 font-bold' : 'fill-[#38bdf8] font-bold';
     return highContrast ? 'fill-yellow-400/60 group-hover:fill-yellow-400' : 'fill-[#64748b] group-hover:fill-white';
   };
 
   return (
-    <div className={`min-h-screen flex flex-col transition-colors duration-300 font-sans antialiased ${theme.bg} pb-24`}>
+    // Обрати внимание: мы передаем CSS-переменную --font-scale в главный контейнер
+    <div 
+      className={`min-h-screen flex flex-col transition-colors duration-300 font-sans antialiased ${theme.bg} pb-24`}
+      style={{ '--font-scale': fontScale }}
+    >
       
       {/* HEADER */}
       <header className={`sticky top-0 z-40 backdrop-blur-md border-b transition-colors ${highContrast ? 'bg-black border-yellow-400' : 'bg-white/90 border-stone-200'}`}>
@@ -429,9 +467,36 @@ export default function App() {
             <button onClick={() => setHighContrast(!highContrast)} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all ${tSize.xs} ${highContrast ? 'bg-yellow-400 text-black border-yellow-400' : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-700'}`}>
               👁️ {t.highContrast}
             </button>
-            <button onClick={() => setLargeText(!largeText)} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all ${tSize.xs} ${largeText ? 'bg-yellow-400 text-black border-yellow-400' : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-700'}`}>
-              A+ {t.largeText}
-            </button>
+            
+            {/* Функция плавной регулировки шрифта с ползунком */}
+            <div className="relative inline-block">
+              <button 
+                onClick={() => setShowFontSlider(!showFontSlider)} 
+                className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex gap-2 items-center ${tSize.xs} ${fontScale > 1 ? 'bg-yellow-400 text-black border-yellow-400' : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-700'}`}
+              >
+                <span>A+ {t.largeText}</span>
+                {fontScale > 1 && <span className="opacity-80">({Math.round(fontScale * 100)}%)</span>}
+              </button>
+              
+              {showFontSlider && (
+                <div className={`absolute top-full left-0 mt-2 p-4 rounded-xl border shadow-xl z-50 flex flex-col gap-3 min-w-[200px] ${theme.panel}`}>
+                  <div className={`flex justify-between items-end w-full text-xs font-bold ${theme.textMain}`}>
+                    <span className="text-sm">A</span>
+                    <span className="opacity-70">{Math.round(fontScale * 100)}%</span>
+                    <span className="text-xl leading-none">A</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="1" 
+                    max="2" 
+                    step="0.02" 
+                    value={fontScale} 
+                    onChange={(e) => setFontScale(Number(e.target.value))} 
+                    className={`w-full h-2 rounded-lg appearance-none cursor-pointer transition-all ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* ИКОНКА ПУБЛИЧНОГО СЕАНСА */}
             <button
@@ -544,7 +609,6 @@ export default function App() {
               <h3 className={`font-serif font-bold mb-4 ${tSize['2xl']} ${theme.textMain}`}>
                 {selectedPoi.title[lang]}
               </h3>
-              
               <p className={`font-medium mb-6 text-justify ${tSize.base} ${theme.textMuted}`}>
                 {selectedPoi.fullText[lang]}
               </p>
@@ -602,7 +666,6 @@ export default function App() {
             {poiData.map((poi) => {
               const isActiveParagraph = selectedPoi.id === poi.id;
               const sentences = getSentences(poi.fullText[lang]);
-              
               return (
                 <p key={poi.id} className={`mb-8 text-justify transition-all duration-300 font-medium ${tSize.lg} ${theme.textMain}`}>
                   {sentences.map((sentence, index) => {
@@ -621,17 +684,25 @@ export default function App() {
       </section>
 
       {/* ==========================================
-          ПЛАВАЮЩИЙ ВИДЖЕТ СЕАНСА
+          ПЛАВАЮЩИЙ ВИДЖЕТ СЕАНСА (ПЕРЕДВИГАЕМЫЙ И РАСШИРЯЕМЫЙ)
           ========================================== */}
       {isLiveMode && (
-        <div className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] rounded-3xl border p-6 flex flex-col gap-4 shadow-2xl transition-all transform animate-slideUp ${theme.panel}`}>
-          <div className={`flex justify-between items-center border-b pb-3 ${theme.border}`}>
+        <div 
+          style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }}
+          className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] h-[380px] min-w-[280px] min-h-[250px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col gap-4 shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}
+        >
+          {/* Шапка окна — drag handle для перемещения */}
+          <div 
+            onPointerDown={handleDragStart}
+            className={`flex justify-between items-center border-b pb-3 cursor-move select-none touch-none ${theme.border}`}
+          >
             <h3 className={`font-serif font-bold flex items-center gap-3 ${tSize.lg} ${theme.textMain}`}>
               <span className={`w-3 h-3 rounded-full ${livePoi ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
               {isAdminLive ? '⚡ Админ-сеанс' : t.liveModalTitle}
             </h3>
             
-            <div className="flex items-center gap-3">
+            {/* Остановка всплытия события drag при клике на кнопки */}
+            <div className="flex items-center gap-3" onPointerDown={(e) => e.stopPropagation()}>
               {!isAdminLive && (
                 <button onClick={handleAdminForceStart} className={`text-xl opacity-50 hover:opacity-100 transition-opacity ${theme.textMain}`} title="Панель Администратора">
                   ⚙️
@@ -644,13 +715,13 @@ export default function App() {
           </div>
 
           {livePoi ? (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 flex-1 overflow-hidden">
               <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>
                 {livePoi.title[lang]}
               </h4>
               
-              <div className="max-h-40 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3">
-                <p className={`text-justify font-medium leading-relaxed ${tSize.sm} ${theme.textMain}`}>
+              <div className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3">
+                <p className={`text-justify font-medium ${tSize.sm} ${theme.textMain}`}>
                   {getSentences(livePoi.fullText[lang]).map((sentence, index) => {
                     const isKaraokeActive = index === liveSentenceIndex;
                     return (
@@ -662,7 +733,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className={`mt-2 flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
+              <div className={`mt-auto flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
                 <span className={`text-xs font-mono w-10 text-right ${theme.textUltraMuted}`}>{formatTime(liveProgress)}</span>
                 <input type="range" min="0" max={liveDuration || 100} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
                 <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(liveDuration)}</span>
@@ -670,7 +741,7 @@ export default function App() {
               <audio ref={liveAudioRef} src={getAudioSrc(livePoi)} preload="auto" />
             </div>
           ) : (
-            <div className="text-center py-6 flex flex-col items-center gap-4 relative">
+            <div className="text-center py-6 flex flex-col items-center justify-center flex-1 gap-4 relative">
               <p className={`${tSize.base} ${theme.textMuted} font-light`}>
                 {t.liveModalWait}
               </p>
@@ -683,10 +754,10 @@ export default function App() {
       )}
 
       {/* ==========================================
-          ВИДЖЕТ ИИ-ЧАТА (КНОПКА И ОКНО)
+          ВИДЖЕТ ИИ-ЧАТА (РАСШИРЯЕМЫЙ И С НАСТРАИВАЕМЫМ ШРИФТОМ)
           ========================================== */}
       
-      {/* Кнопка открытия чата (всегда на экране внизу слева) */}
+      {/* Кнопка открытия чата */}
       <button 
         onClick={() => setIsChatOpen(!isChatOpen)}
         className={`fixed bottom-4 left-4 md:bottom-8 md:left-8 z-50 w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all transform hover:scale-105 ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-[#1C3D5A] text-white'} ${isChatOpen ? 'rotate-12' : ''}`}
@@ -695,9 +766,9 @@ export default function App() {
         <span className="text-3xl">🤖</span>
       </button>
 
-      {/* Само окно чата */}
+      {/* Окно чата (с возможностью расширения) */}
       {isChatOpen && (
-        <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[380px] h-[450px] rounded-3xl border flex flex-col shadow-2xl transition-all transform animate-slideUp ${theme.panel}`}>
+        <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[380px] h-[450px] min-w-[280px] min-h-[300px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
           
           {/* Header чата */}
           <div className={`flex justify-between items-center px-5 py-4 border-b ${theme.border}`}>
@@ -713,14 +784,14 @@ export default function App() {
           <div className={`flex-1 overflow-y-auto p-4 flex flex-col gap-3 ${highContrast ? 'bg-black' : 'bg-stone-50 rounded-b-3xl'}`}>
             {chatMessages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? theme.chatBubbleUser + ' rounded-tr-sm' : theme.chatBubbleAi + ' rounded-tl-sm shadow-sm'}`}>
+                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} ${msg.sender === 'user' ? theme.chatBubbleUser + ' rounded-tr-sm' : theme.chatBubbleAi + ' rounded-tl-sm shadow-sm'}`}>
                   {msg.text}
                 </div>
               </div>
             ))}
             {isAiTyping && (
               <div className="flex justify-start">
-                <div className={`max-w-[80%] p-3 rounded-2xl text-sm italic opacity-70 ${theme.chatBubbleAi} rounded-tl-sm`}>
+                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} italic opacity-70 ${theme.chatBubbleAi} rounded-tl-sm`}>
                   {t.aiTyping}
                 </div>
               </div>
@@ -735,7 +806,7 @@ export default function App() {
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={t.chatInput}
-              className={`flex-1 px-4 py-2 rounded-xl border outline-none text-sm transition-colors ${highContrast ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600' : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'}`}
+              className={`flex-1 px-4 py-2 rounded-xl border outline-none ${tSize.sm} transition-colors ${highContrast ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600' : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'}`}
             />
             <button 
               type="submit" 
