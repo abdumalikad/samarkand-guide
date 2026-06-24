@@ -189,25 +189,34 @@ export default function App() {
   // ==========================================
   // ОТПРАВКА СООБЩЕНИЯ В ИИ-ЧАТ
   // ==========================================
-  const handleSendMessage = (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
 
-    const newMessages = [...chatMessages, { sender: 'user', text: chatInput }];
+    const userMessage = { sender: 'user', text: chatInput };
+    const newMessages = [...chatMessages, userMessage];
     setChatMessages(newMessages);
     setChatInput('');
     setIsAiTyping(true);
 
-    setTimeout(() => {
-      const aiResponse = lang === 'ru' 
-        ? 'Я пока работаю в тестовом режиме интерфейса. Скоро меня подключат к базе знаний Медресе!'
-        : lang === 'en'
-        ? 'I am currently in UI test mode. Soon I will be connected to the Madrasah knowledge base!'
-        : 'Men hozirda interfeys sinov rejimida ishlayapman. Tez orada Madrasa bilimlar bazasiga ulanaman!';
-      
-      setChatMessages(prev => [...prev, { sender: 'ai', text: aiResponse }]);
+    try {
+      const response = await fetch('http://localhost:5001/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          message: chatInput,
+          lang: lang 
+        })
+      });
+
+      const data = await response.json();
+      setChatMessages(prev => [...prev, { sender: 'ai', text: data.reply }]);
+    } catch (error) {
+      console.error("Не удалось связаться с ИИ:", error);
+      setChatMessages(prev => [...prev, { sender: 'ai', text: "Ошибка соединения с сервером гида." }]);
+    } finally {
       setIsAiTyping(false);
-    }, 1500);
+    }
   };
 
   // ==========================================
