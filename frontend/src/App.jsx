@@ -112,7 +112,9 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [isAiTyping, setIsAiTyping] = useState(false);
-  const [chatMessages, setChatMessages] = useState([]);
+  const [chatMessages, setChatMessages] = useState([
+    { sender: 'ai', text: translations['ru'].chatWelcomeDefault }
+  ]);
   
   // Координаты для свободного перемещения окна сеанса
   const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
@@ -153,11 +155,6 @@ export default function App() {
     };
   }, [sessionPos]);
 
-  // Инициализация дефолтного приветственного сообщения чата при первом открытии/смене языка
-  useEffect(() => {
-    setChatMessages([{ sender: 'ai', text: t.chatWelcomeDefault }]);
-  }, [lang]); // eslint-disable-line
-
   // Автоскролл чата вниз
   useEffect(() => {
     if (chatEndRef.current) {
@@ -187,8 +184,13 @@ export default function App() {
   };
 
   // ==========================================
-  // ОТПРАВКА СООБЩЕНИЯ В ИИ-ЧАТ
+  // ОТПРАВКА СООБЩЕНИЯ В ИИ-ЧАТ (С ПОДДЕРЖКОЙ ПАМЯТИ)
   // ==========================================
+  // ==========================================
+// ИСПРАВЛЕНИЕ В App.jsx — функция handleSendMessage
+// Найди эту функцию в своём App.jsx и замени на эту версию
+// ==========================================
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -205,6 +207,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           message: chatInput,
+          history: chatMessages,  // ← ЕДИНСТВЕННОЕ ИЗМЕНЕНИЕ: отправляем историю чата
           lang: lang 
         })
       });
