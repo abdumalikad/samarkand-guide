@@ -112,9 +112,54 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [isAiTyping, setIsAiTyping] = useState(false);
-  const [chatMessages, setChatMessages] = useState([
-    { sender: 'ai', text: translations['ru'].chatWelcomeDefault }
+  const [chatTabs, setChatTabs] = useState([
+    { id: 1, name: 'Чат 1', messages: [{ sender: 'ai', text: translations['ru'].chatWelcomeDefault }] }
   ]);
+  const [activeTabId, setActiveTabId] = useState(1);
+ 
+  // Текущий активный таб и его сообщения
+  const activeTab = chatTabs.find(tab => tab.id === activeTabId) || chatTabs[0];
+  const chatMessages = activeTab?.messages || [];
+
+  const addNewTab = () => {
+    const newId = Date.now();
+    setChatTabs(prev => [
+      ...prev,
+      {
+        id: newId,
+        name: `Чат ${prev.length + 1}`,
+        messages: [{ sender: 'ai', text: t.chatWelcomeDefault }]
+      }
+    ]);
+    setActiveTabId(newId);
+  };
+ 
+  // Удалить/очистить вкладку
+  const deleteTab = (tabId) => {
+    if (chatTabs.length === 1) {
+      // Последняя вкладка — просто очищаем
+      setChatTabs([{
+        id: activeTabId,
+        name: 'Чат 1',
+        messages: [{ sender: 'ai', text: t.chatWelcomeDefault }]
+      }]);
+      return;
+    }
+    const remaining = chatTabs.filter(tab => tab.id !== tabId);
+    setChatTabs(remaining);
+    if (activeTabId === tabId) {
+      setActiveTabId(remaining[remaining.length - 1].id);
+    }
+  };
+ 
+  // Очистить текущий чат (не удаляя вкладку)
+  const clearChat = () => {
+    setChatTabs(prev => prev.map(tab =>
+      tab.id === activeTabId
+        ? { ...tab, messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }
+        : tab
+    ));
+  };
   
   // Координаты для свободного перемещения окна сеанса
   const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
@@ -194,29 +239,41 @@ export default function App() {
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-
+ 
     const userMessage = { sender: 'user', text: chatInput };
-    const newMessages = [...chatMessages, userMessage];
-    setChatMessages(newMessages);
+    const updatedMessages = [...chatMessages, userMessage];
+ 
+    // Сразу показываем сообщение пользователя
+    setChatTabs(prev => prev.map(tab =>
+      tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab
+    ));
     setChatInput('');
     setIsAiTyping(true);
-
+ 
     try {
       const response = await fetch('http://localhost:5001/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: chatInput,
-          history: chatMessages,  // ← ЕДИНСТВЕННОЕ ИЗМЕНЕНИЕ: отправляем историю чата
-          lang: lang 
+          history: chatMessages,
+          lang: lang
         })
       });
-
+ 
       const data = await response.json();
-      setChatMessages(prev => [...prev, { sender: 'ai', text: data.reply }]);
+      setChatTabs(prev => prev.map(tab =>
+        tab.id === activeTabId
+          ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: data.reply }] }
+          : tab
+      ));
     } catch (error) {
-      console.error("Не удалось связаться с ИИ:", error);
-      setChatMessages(prev => [...prev, { sender: 'ai', text: "Ошибка соединения с сервером гида." }]);
+      console.error('Ошибка связи с ИИ:', error);
+      setChatTabs(prev => prev.map(tab =>
+        tab.id === activeTabId
+          ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: 'Ошибка соединения с сервером.' }] }
+          : tab
+      ));
     } finally {
       setIsAiTyping(false);
     }
@@ -333,7 +390,11 @@ export default function App() {
         
         // Если сеанс только что закончился, открываем чат с ИИ и выводим специальное сообщение
         if (hasSessionPlayed.current) {
-          setChatMessages(prev => [...prev, { sender: 'ai', text: t.chatWelcomeAfter }]);
+          setChatTabs(prev => prev.map(tab =>
+            tab.id === activeTabId
+              ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] }
+              : tab
+          ));
           setIsChatOpen(true);
           hasSessionPlayed.current = false;
         }
@@ -780,23 +841,74 @@ export default function App() {
 
       {/* Окно чата (с возможностью расширения) */}
       {isChatOpen && (
-        <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[380px] h-[450px] min-w-[280px] min-h-[300px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
-          
-          {/* Header чата */}
-          <div className={`flex justify-between items-center px-5 py-4 border-b ${theme.border}`}>
+        <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[400px] h-[500px] min-w-[280px] min-h-[300px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
+ 
+          {/* ── Вкладки ── */}
+          <div className={`flex items-center gap-1 px-3 pt-3 border-b overflow-x-auto ${theme.border}`}>
+            {chatTabs.map(tab => (
+              <div
+                key={tab.id}
+                className={`flex items-center gap-1 px-3 py-1.5 rounded-t-xl text-xs font-bold cursor-pointer whitespace-nowrap transition-all flex-shrink-0 ${
+                  tab.id === activeTabId
+                    ? (highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white')
+                    : (highContrast ? 'bg-zinc-800 text-yellow-400 hover:bg-zinc-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200')
+                }`}
+                onClick={() => setActiveTabId(tab.id)}
+              >
+                <span>{tab.name}</span>
+                {/* Крестик удаления вкладки */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteTab(tab.id); }}
+                  className="ml-1 opacity-60 hover:opacity-100 text-sm leading-none"
+                  title="Удалить вкладку"
+                >×</button>
+              </div>
+            ))}
+ 
+            {/* Кнопка новой вкладки */}
+            <button
+              onClick={addNewTab}
+              className={`flex-shrink-0 px-2 py-1.5 rounded-t-xl text-sm font-bold transition-all ${
+                highContrast ? 'text-yellow-400 hover:bg-zinc-800' : 'text-stone-400 hover:bg-stone-100 hover:text-stone-700'
+              }`}
+              title="Новый чат"
+            >＋</button>
+          </div>
+ 
+          {/* ── Шапка чата ── */}
+          <div className={`flex justify-between items-center px-5 py-3 border-b ${theme.border}`}>
             <h3 className={`font-bold flex items-center gap-2 ${tSize.sm} ${theme.textMain}`}>
               <span className="text-xl">🤖</span> {t.chatTitle}
             </h3>
-            <button onClick={() => setIsChatOpen(false)} className={`text-xl font-bold opacity-60 hover:opacity-100 ${theme.textMain}`}>
-              ✕
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Кнопка очистки текущего чата */}
+              <button
+                onClick={clearChat}
+                className={`text-xs px-2 py-1 rounded-lg border transition-all ${
+                  highContrast
+                    ? 'border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black'
+                    : 'border-stone-300 text-stone-400 hover:border-red-400 hover:text-red-500'
+                }`}
+                title="Очистить чат"
+              >
+                🗑 Очистить
+              </button>
+              <button
+                onClick={() => setIsChatOpen(false)}
+                className={`text-xl font-bold opacity-60 hover:opacity-100 ${theme.textMain}`}
+              >✕</button>
+            </div>
           </div>
-
-          {/* Область сообщений */}
-          <div className={`flex-1 overflow-y-auto p-4 flex flex-col gap-3 ${highContrast ? 'bg-black' : 'bg-stone-50 rounded-b-3xl'}`}>
+ 
+          {/* ── Сообщения ── */}
+          <div className={`flex-1 overflow-y-auto p-4 flex flex-col gap-3 ${highContrast ? 'bg-black' : 'bg-stone-50'}`}>
             {chatMessages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} ${msg.sender === 'user' ? theme.chatBubbleUser + ' rounded-tr-sm' : theme.chatBubbleAi + ' rounded-tl-sm shadow-sm'}`}>
+                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} ${
+                  msg.sender === 'user'
+                    ? theme.chatBubbleUser + ' rounded-tr-sm'
+                    : theme.chatBubbleAi + ' rounded-tl-sm shadow-sm'
+                }`}>
                   {msg.text}
                 </div>
               </div>
@@ -810,23 +922,27 @@ export default function App() {
             )}
             <div ref={chatEndRef} />
           </div>
-
-          {/* Поле ввода */}
+ 
+          {/* ── Поле ввода ── */}
           <form onSubmit={handleSendMessage} className={`p-3 border-t flex gap-2 rounded-b-3xl ${theme.panel}`}>
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={t.chatInput}
-              className={`flex-1 px-4 py-2 rounded-xl border outline-none ${tSize.sm} transition-colors ${highContrast ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600' : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'}`}
+              className={`flex-1 px-4 py-2 rounded-xl border outline-none ${tSize.sm} transition-colors ${
+                highContrast
+                  ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600'
+                  : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'
+              }`}
             />
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={!chatInput.trim()}
-              className={`p-2 px-4 rounded-xl font-bold transition-all ${!chatInput.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'} ${highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white'}`}
-            >
-              ➤
-            </button>
+              className={`p-2 px-4 rounded-xl font-bold transition-all ${
+                !chatInput.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'
+              } ${highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white'}`}
+            >➤</button>
           </form>
         </div>
       )}
