@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { poiData } from './data/poiData';
+import { Analytics } from '@vercel/analytics/next';
 
 // ==========================================
 // MOCK DATA И ПЕРЕВОДЫ
@@ -958,6 +959,7 @@ export default function App() {
           </span>
         </div>
       </footer>
+      <Analytics />
     </div>
   );
 }
