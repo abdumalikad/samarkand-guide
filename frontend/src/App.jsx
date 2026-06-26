@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { poiData } from './data/poiData';
-import { Analytics } from '@vercel/analytics/next';
+import { Analytics } from '@vercel/analytics/react';
 
 // ==========================================
 // MOCK DATA И ПЕРЕВОДЫ
 // ==========================================
-
 const translations = {
   ru: {
     title: 'Цифровой музей Медресе Улугбека',
@@ -96,18 +95,21 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [highContrast, setHighContrast] = useState(false);
   
-  // Плавная регулировка шрифта: множитель от 1.0 (обычный) до 2.0 (увеличен вдвое)
+  // Плавная регулировка шрифта: множитель от 1.0 до 2.0
   const [fontScale, setFontScale] = useState(1);
   const [showFontSlider, setShowFontSlider] = useState(false);
 
-  // LIVE СЕАНС И РЕЖИМ АДМИНИСТРАТОРА
+  // ==========================================
+  // LIVE СЕАНС (ЕДИНЫЙ ТРЕК НА 4 МИНУТЫ 1 СЕК)
+  // ==========================================
+  const LIVE_DURATION = 241; // Ровно 241 секунда для всех языков
+  
   const [isLiveMode, setIsLiveMode] = useState(false);
   const [isAdminLive, setIsAdminLive] = useState(false);
   const [liveCountdown, setLiveCountdown] = useState('00:00');
-  const [livePoi, setLivePoi] = useState(null);
+  const [isLiveActive, setIsLiveActive] = useState(false);
   const [liveSentenceIndex, setLiveSentenceIndex] = useState(-1);
   const [liveProgress, setLiveProgress] = useState(0);
-  const [liveDuration, setLiveDuration] = useState(0);
 
   // ИИ-ЧАТ СОСТОЯНИЯ
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -118,10 +120,49 @@ export default function App() {
   ]);
   const [activeTabId, setActiveTabId] = useState(1);
  
-  // Текущий активный таб и его сообщения
   const activeTab = chatTabs.find(tab => tab.id === activeTabId) || chatTabs[0];
   const chatMessages = activeTab?.messages || [];
 
+  // Координаты для свободного перемещения окна сеанса
+  const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+
+  // Рефы
+  const adminTimeRef = useRef(0);
+  const hasSessionPlayed = useRef(false);
+  const audioRef = useRef(null);
+  const liveAudioRef = useRef(null);
+  const chatEndRef = useRef(null);
+  const liveTextContainerRef = useRef(null);
+  const activeSentenceRef = useRef(null);
+  const t = translations[lang];
+
+  // ==========================================
+  // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+  // ==========================================
+  
+  // Разбивка на предложения
+  const getSentences = (text) => {
+    if (!text) return [];
+    return text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  };
+
+  // Сборка всего текста со всех точек POI в единый массив предложений для сеанса
+  const getLiveSentences = (currentLang) => {
+    return poiData.flatMap(poi => getSentences(poi.fullText[currentLang]));
+  };
+
+  const formatTime = (time) => {
+    if (isNaN(time)) return "00:00";
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // ==========================================
+  // ФУНКЦИИ ЧАТА (ВКЛАДКИ И ОТПРАВКА)
+  // ==========================================
   const addNewTab = () => {
     const newId = Date.now();
     setChatTabs(prev => [
@@ -135,15 +176,9 @@ export default function App() {
     setActiveTabId(newId);
   };
  
-  // Удалить/очистить вкладку
   const deleteTab = (tabId) => {
     if (chatTabs.length === 1) {
-      // Последняя вкладка — просто очищаем
-      setChatTabs([{
-        id: activeTabId,
-        name: 'Чат 1',
-        messages: [{ sender: 'ai', text: t.chatWelcomeDefault }]
-      }]);
+      setChatTabs([{ id: activeTabId, name: 'Чат 1', messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }]);
       return;
     }
     const remaining = chatTabs.filter(tab => tab.id !== tabId);
@@ -152,30 +187,46 @@ export default function App() {
       setActiveTabId(remaining[remaining.length - 1].id);
     }
   };
- 
-  // Очистить текущий чат (не удаляя вкладку)
+
   const clearChat = () => {
     setChatTabs(prev => prev.map(tab =>
-      tab.id === activeTabId
-        ? { ...tab, messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }
-        : tab
+      tab.id === activeTabId ? { ...tab, messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] } : tab
     ));
   };
-  
-  // Координаты для свободного перемещения окна сеанса
-  const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
-  const isDragging = useRef(false);
-  const dragStart = useRef({ x: 0, y: 0 });
 
-  // Рефы
-  const adminTimeRef = useRef(0);
-  const hasSessionPlayed = useRef(false);
-  const audioRef = useRef(null);
-  const liveAudioRef = useRef(null);
-  const chatEndRef = useRef(null);
-  const t = translations[lang];
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+ 
+    const userMessage = { sender: 'user', text: chatInput };
+    const updatedMessages = [...chatMessages, userMessage];
+    
+    setChatTabs(prev => prev.map(tab => tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab));
+    setChatInput('');
+    setIsAiTyping(true);
+ 
+    try {
+      const response = await fetch('https://samarkand-guide.onrender.com/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: chatInput, history: chatMessages, lang: lang })
+      });
+      const data = await response.json();
+      setChatTabs(prev => prev.map(tab =>
+        tab.id === activeTabId ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: data.reply }] } : tab
+      ));
+    } catch (error) {
+      setChatTabs(prev => prev.map(tab =>
+        tab.id === activeTabId ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: 'Ошибка соединения с сервером.' }] } : tab
+      ));
+    } finally {
+      setIsAiTyping(false);
+    }
+  };
 
-  // Перемещение окна сеанса (Drag and Drop) через PointerEvents
+  // ==========================================
+  // ПЕРЕМЕЩЕНИЕ ОКНА (DRAG & DROP)
+  // ==========================================
   const handleDragStart = (e) => {
     isDragging.current = true;
     dragStart.current = { x: e.clientX - sessionPos.x, y: e.clientY - sessionPos.y };
@@ -189,9 +240,7 @@ export default function App() {
         y: e.clientY - dragStart.current.y
       });
     };
-    const handleDragEnd = () => {
-      isDragging.current = false;
-    };
+    const handleDragEnd = () => { isDragging.current = false; };
 
     window.addEventListener('pointermove', handleDragMove);
     window.addEventListener('pointerup', handleDragEnd);
@@ -201,13 +250,15 @@ export default function App() {
     };
   }, [sessionPos]);
 
-  // Автоскролл чата вниз
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatMessages, isChatOpen]);
 
+  // ==========================================
+  // АУДИО (СВОБОДНЫЙ РЕЖИМ)
+  // ==========================================
   const getAudioSrc = (poi) => {
     if (!poi) return '';
     const langMap = { ru: 'rus', en: 'eng', uz: 'uzb' };
@@ -217,72 +268,6 @@ export default function App() {
     return `/Audio/${prefix}${fileNumber}.mp3`;
   };
 
-  const getSentences = (text) => {
-    if (!text) return [];
-    return text.split(/(?<=[.!?])\s+/).filter(Boolean);
-  };
-
-  const formatTime = (time) => {
-    if (isNaN(time)) return "00:00";
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  // ==========================================
-  // ОТПРАВКА СООБЩЕНИЯ В ИИ-ЧАТ (С ПОДДЕРЖКОЙ ПАМЯТИ)
-  // ==========================================
-  // ==========================================
-// ИСПРАВЛЕНИЕ В App.jsx — функция handleSendMessage
-// Найди эту функцию в своём App.jsx и замени на эту версию
-// ==========================================
-
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
- 
-    const userMessage = { sender: 'user', text: chatInput };
-    const updatedMessages = [...chatMessages, userMessage];
- 
-    // Сразу показываем сообщение пользователя
-    setChatTabs(prev => prev.map(tab =>
-      tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab
-    ));
-    setChatInput('');
-    setIsAiTyping(true);
- 
-    try {
-      const response = await fetch('https://samarkand-guide.onrender.com/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: chatInput,
-          history: chatMessages,
-          lang: lang
-        })
-      });
- 
-      const data = await response.json();
-      setChatTabs(prev => prev.map(tab =>
-        tab.id === activeTabId
-          ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: data.reply }] }
-          : tab
-      ));
-    } catch (error) {
-      console.error('Ошибка связи с ИИ:', error);
-      setChatTabs(prev => prev.map(tab =>
-        tab.id === activeTabId
-          ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: 'Ошибка соединения с сервером.' }] }
-          : tab
-      ));
-    } finally {
-      setIsAiTyping(false);
-    }
-  };
-
-  // ==========================================
-  // АДМИН: ФУНКЦИЯ ПРИНУДИТЕЛЬНОГО ЗАПУСКА
-  // ==========================================
   const handleAdminForceStart = () => {
     const now = new Date();
     const remainingMins = 59 - now.getMinutes();
@@ -306,17 +291,23 @@ export default function App() {
   };
 
   // ==========================================
-  // ЕДИНАЯ СИНХРОНИЗАЦИЯ СЕАНСОВ
+  // 🌟 СИНХРОНИЗАЦИЯ ЕДИНОГО СЕАНСА
   // ==========================================
+  
+  // Автоскролл текста караоке в окне сеанса
   useEffect(() => {
-    if (liveAudioRef.current && isLiveMode) {
-      liveAudioRef.current.load();
+    if (activeSentenceRef.current && liveTextContainerRef.current) {
+      const container = liveTextContainerRef.current;
+      const el = activeSentenceRef.current;
+      container.scrollTo({
+        top: el.offsetTop - container.offsetTop - (container.clientHeight / 2) + (el.clientHeight / 2),
+        behavior: 'smooth'
+      });
     }
-  }, [livePoi?.id, isLiveMode]);
+  }, [liveSentenceIndex]);
 
+  // Главный таймер сеанса
   useEffect(() => {
-    const trackDurations = [180, 240, 210, 300, 150]; 
-
     const syncLiveSession = () => {
       const now = new Date();
       const mins = now.getMinutes();
@@ -324,77 +315,54 @@ export default function App() {
 
       const remainingMins = 59 - mins;
       const remainingSecs = 59 - secs;
-      setLiveCountdown(
-        `${remainingMins.toString().padStart(2, '0')}:${remainingSecs.toString().padStart(2, '0')}`
-      );
+      setLiveCountdown(`${remainingMins.toString().padStart(2, '0')}:${remainingSecs.toString().padStart(2, '0')}`);
 
       let elapsedSeconds = isAdminLive ? adminTimeRef.current : (mins * 60 + secs);
 
-      let cumulativeTime = 0;
-      let currentActivePoi = null;
-      let calculatedSentenceIndex = -1;
-      let targetTrackTime = 0;
-      let activeTrackDuration = 0;
-
-      for (let i = 0; i < poiData.length; i++) {
-        const currentTrackDuration = trackDurations[i] || 180;
-        if (elapsedSeconds >= cumulativeTime && elapsedSeconds < cumulativeTime + currentTrackDuration) {
-          currentActivePoi = poiData[i];
-          targetTrackTime = elapsedSeconds - cumulativeTime;
-          activeTrackDuration = currentTrackDuration;
-          break;
-        }
-        cumulativeTime += currentTrackDuration;
-      }
-
-      setLivePoi(currentActivePoi);
-
-      if (currentActivePoi) {
+      // Проверяем, вписываемся ли мы в лимит 4 мин 1 сек (241 сек)
+      if (elapsedSeconds <= LIVE_DURATION) {
+        setIsLiveActive(true);
         hasSessionPlayed.current = true;
-        setLiveProgress(targetTrackTime);
-        setLiveDuration(activeTrackDuration);
+        setLiveProgress(elapsedSeconds);
+
         if (isLiveMode && liveAudioRef.current) {
           const audioEl = liveAudioRef.current;
-          const actualAudioDuration = audioEl.duration || Infinity;
 
-          if (targetTrackTime < actualAudioDuration) {
-            if (Math.abs(audioEl.currentTime - targetTrackTime) > 2) {
-              audioEl.currentTime = targetTrackTime;
-            }
-            if (audioEl.paused) {
-              audioEl.play().catch(err => console.log("Live playback wait:", err));
-            }
-
-            if (currentActivePoi?.fullText?.[lang]) {
-              const sentences = getSentences(currentActivePoi.fullText[lang]);
-              const progressRatio = targetTrackTime / actualAudioDuration;
-              calculatedSentenceIndex = Math.min(
-                Math.floor(progressRatio * sentences.length),
-                sentences.length - 1
-              );
-            }
-          } else {
-            if (!audioEl.paused) audioEl.pause();
-            calculatedSentenceIndex = -1; 
+          // Жесткая синхронизация: если плеер отстал или убежал, или сменился язык
+          if (Math.abs(audioEl.currentTime - elapsedSeconds) > 1.5) {
+            audioEl.currentTime = elapsedSeconds;
           }
+          
+          if (audioEl.paused) {
+            audioEl.play().catch(err => console.log("Live playback block:", err));
+          }
+
+          // Высчитываем, какое предложение сейчас должно подсвечиваться
+          const sentences = getLiveSentences(lang);
+          const progressRatio = elapsedSeconds / LIVE_DURATION;
+          const calculatedSentenceIndex = Math.min(
+            Math.floor(progressRatio * sentences.length),
+            sentences.length - 1
+          );
+          setLiveSentenceIndex(calculatedSentenceIndex);
         }
-        setLiveSentenceIndex(calculatedSentenceIndex);
+        
         if (isAdminLive) adminTimeRef.current += 1;
+        
       } else {
         // СЕАНС ЗАВЕРШЕН (или еще не начался)
+        setIsLiveActive(false);
         setLiveProgress(0);
-        setLiveDuration(0);
         setLiveSentenceIndex(-1);
+        
         if (liveAudioRef.current && !liveAudioRef.current.paused) {
           liveAudioRef.current.pause();
         }
         
-        // Если сеанс только что закончился, открываем чат с ИИ и выводим специальное сообщение
+        // Открываем чат после сеанса
         if (hasSessionPlayed.current) {
           setChatTabs(prev => prev.map(tab =>
-            tab.id === activeTabId
-              ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] }
-              : tab
+            tab.id === activeTabId ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] } : tab
           ));
           setIsChatOpen(true);
           hasSessionPlayed.current = false;
@@ -412,6 +380,7 @@ export default function App() {
     return () => clearInterval(liveInterval);
   }, [isLiveMode, isAdminLive, lang]);
 
+
   // ==========================================
   // ОБЫЧНЫЙ РЕЖИМ (EXPLORER)
   // ==========================================
@@ -420,7 +389,6 @@ export default function App() {
       if (liveAudioRef.current) liveAudioRef.current.pause();
       setIsLiveMode(false);
     }
-    
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
@@ -486,6 +454,7 @@ export default function App() {
     }
   }, [selectedPoi, lang]);
 
+
   // ==========================================
   // СТИЛИ И ТЕМЫ
   // ==========================================
@@ -503,8 +472,6 @@ export default function App() {
     chatBubbleAi: highContrast ? 'bg-zinc-800 text-yellow-400 border border-yellow-400' : 'bg-stone-100 text-stone-800 border border-stone-200'
   };
 
-  // Динамические размеры шрифтов на базе CSS-переменной --font-scale.
-  // Это позволяет тексту плавно увеличиваться в зависимости от ползунка
   const tSize = {
     xs: 'text-[calc(0.75rem*var(--font-scale))] leading-normal',
     sm: 'text-[calc(0.875rem*var(--font-scale))] leading-normal',
@@ -527,8 +494,8 @@ export default function App() {
     return highContrast ? 'fill-yellow-400/60 group-hover:fill-yellow-400' : 'fill-[#64748b] group-hover:fill-white';
   };
 
+
   return (
-    // Обрати внимание: мы передаем CSS-переменную --font-scale в главный контейнер
     <div 
       className={`min-h-screen flex flex-col transition-colors duration-300 font-sans antialiased ${theme.bg} pb-24`}
       style={{ '--font-scale': fontScale }}
@@ -542,7 +509,6 @@ export default function App() {
               👁️ {t.highContrast}
             </button>
             
-            {/* Функция плавной регулировки шрифта с ползунком */}
             <div className="relative inline-block">
               <button 
                 onClick={() => setShowFontSlider(!showFontSlider)} 
@@ -561,9 +527,7 @@ export default function App() {
                   </div>
                   <input 
                     type="range" 
-                    min="1" 
-                    max="2" 
-                    step="0.02" 
+                    min="1" max="2" step="0.02" 
                     value={fontScale} 
                     onChange={(e) => setFontScale(Number(e.target.value))} 
                     className={`w-full h-2 rounded-lg appearance-none cursor-pointer transition-all ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`}
@@ -582,13 +546,13 @@ export default function App() {
                 }
               }}
               className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex items-center gap-2 shadow-sm ${tSize.xs} ${
-                livePoi || isLiveMode
+                isLiveActive || isLiveMode
                   ? 'bg-red-600 text-white border-red-600 animate-pulse'
                   : (highContrast ? 'bg-zinc-900 text-yellow-400 border-yellow-400' : 'bg-stone-100 text-stone-700 border-stone-300')
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${livePoi || isLiveMode ? 'bg-white' : 'bg-red-500'}`}></span>
-              {livePoi && isLiveMode ? t.liveBtnActive : `${t.liveBtnWait}${liveCountdown}`}
+              <span className={`w-2 h-2 rounded-full ${isLiveActive || isLiveMode ? 'bg-white' : 'bg-red-500'}`}></span>
+              {isLiveActive && isLiveMode ? t.liveBtnActive : `${t.liveBtnWait}${liveCountdown}`}
             </button>
           </div>
 
@@ -612,7 +576,7 @@ export default function App() {
         </p>
       </section>
 
-      {/* EXPLORER */}
+      {/* EXPLORER (Обычный режим с интерактивной картой) */}
       <section className="flex-grow max-w-7xl w-full mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative">
         <div className={`p-6 md:p-8 rounded-3xl border w-full ${theme.panel}`}>
           <div className="mb-6">
@@ -758,24 +722,23 @@ export default function App() {
       </section>
 
       {/* ==========================================
-          ПЛАВАЮЩИЙ ВИДЖЕТ СЕАНСА (ПЕРЕДВИГАЕМЫЙ И РАСШИРЯЕМЫЙ)
+          ПЛАВАЮЩИЙ ВИДЖЕТ СЕАНСА (НОВЫЙ ЕДИНЫЙ РЕЖИМ)
           ========================================== */}
       {isLiveMode && (
         <div 
           style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }}
           className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] h-[380px] min-w-[280px] min-h-[250px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col gap-4 shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}
         >
-          {/* Шапка окна — drag handle для перемещения */}
+          {/* Шапка окна */}
           <div 
             onPointerDown={handleDragStart}
             className={`flex justify-between items-center border-b pb-3 cursor-move select-none touch-none ${theme.border}`}
           >
             <h3 className={`font-serif font-bold flex items-center gap-3 ${tSize.lg} ${theme.textMain}`}>
-              <span className={`w-3 h-3 rounded-full ${livePoi ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
+              <span className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
               {isAdminLive ? '⚡ Админ-сеанс' : t.liveModalTitle}
             </h3>
             
-            {/* Остановка всплытия события drag при клике на кнопки */}
             <div className="flex items-center gap-3" onPointerDown={(e) => e.stopPropagation()}>
               {!isAdminLive && (
                 <button onClick={handleAdminForceStart} className={`text-xl opacity-50 hover:opacity-100 transition-opacity ${theme.textMain}`} title="Панель Администратора">
@@ -788,18 +751,23 @@ export default function App() {
             </div>
           </div>
 
-          {livePoi ? (
+          {isLiveActive ? (
             <div className="flex flex-col gap-3 flex-1 overflow-hidden">
               <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>
-                {livePoi.title[lang]}
+                {t.title}
               </h4>
               
-              <div className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3">
+              {/* Окно с полным текстом для караоке */}
+              <div ref={liveTextContainerRef} className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3 relative">
                 <p className={`text-justify font-medium ${tSize.sm} ${theme.textMain}`}>
-                  {getSentences(livePoi.fullText[lang]).map((sentence, index) => {
+                  {getLiveSentences(lang).map((sentence, index) => {
                     const isKaraokeActive = index === liveSentenceIndex;
                     return (
-                      <span key={index} className={`transition-all duration-300 ${isKaraokeActive ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}>
+                      <span 
+                        key={index} 
+                        ref={isKaraokeActive ? activeSentenceRef : null}
+                        className={`transition-all duration-300 ${isKaraokeActive ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}
+                      >
                         {sentence}{' '}
                       </span>
                     );
@@ -807,12 +775,15 @@ export default function App() {
                 </p>
               </div>
 
+              {/* Таймлайн сеанса (241 секунда) */}
               <div className={`mt-auto flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
                 <span className={`text-xs font-mono w-10 text-right ${theme.textUltraMuted}`}>{formatTime(liveProgress)}</span>
-                <input type="range" min="0" max={liveDuration || 100} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
-                <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(liveDuration)}</span>
+                <input type="range" min="0" max={LIVE_DURATION} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
+                <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(LIVE_DURATION)}</span>
               </div>
-              <audio ref={liveAudioRef} src={getAudioSrc(livePoi)} preload="auto" />
+              
+              {/* Единый источник звука, который переключается при смене языка */}
+              <audio ref={liveAudioRef} src={`/Audio/live_${lang}.mp3`} preload="auto" />
             </div>
           ) : (
             <div className="text-center py-6 flex flex-col items-center justify-center flex-1 gap-4 relative">
@@ -828,10 +799,8 @@ export default function App() {
       )}
 
       {/* ==========================================
-          ВИДЖЕТ ИИ-ЧАТА (РАСШИРЯЕМЫЙ И С НАСТРАИВАЕМЫМ ШРИФТОМ)
+          ВИДЖЕТ ИИ-ЧАТА
           ========================================== */}
-      
-      {/* Кнопка открытия чата */}
       <button 
         onClick={() => setIsChatOpen(!isChatOpen)}
         className={`fixed bottom-4 left-4 md:bottom-8 md:left-8 z-50 w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all transform hover:scale-105 ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-[#1C3D5A] text-white'} ${isChatOpen ? 'rotate-12' : ''}`}
@@ -840,7 +809,6 @@ export default function App() {
         <span className="text-3xl">🤖</span>
       </button>
 
-      {/* Окно чата (с возможностью расширения) */}
       {isChatOpen && (
         <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[400px] h-[500px] min-w-[280px] min-h-[300px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
  
@@ -857,7 +825,6 @@ export default function App() {
                 onClick={() => setActiveTabId(tab.id)}
               >
                 <span>{tab.name}</span>
-                {/* Крестик удаления вкладки */}
                 <button
                   onClick={(e) => { e.stopPropagation(); deleteTab(tab.id); }}
                   className="ml-1 opacity-60 hover:opacity-100 text-sm leading-none"
@@ -866,7 +833,6 @@ export default function App() {
               </div>
             ))}
  
-            {/* Кнопка новой вкладки */}
             <button
               onClick={addNewTab}
               className={`flex-shrink-0 px-2 py-1.5 rounded-t-xl text-sm font-bold transition-all ${
@@ -882,7 +848,6 @@ export default function App() {
               <span className="text-xl">🤖</span> {t.chatTitle}
             </h3>
             <div className="flex items-center gap-2">
-              {/* Кнопка очистки текущего чата */}
               <button
                 onClick={clearChat}
                 className={`text-xs px-2 py-1 rounded-lg border transition-all ${
@@ -959,7 +924,10 @@ export default function App() {
           </span>
         </div>
       </footer>
+      
+      {/* VERCEL АНАЛИТИКА */}
       <Analytics />
+      
     </div>
   );
 }

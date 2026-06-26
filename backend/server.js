@@ -1,127 +1,104 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const API_KEY = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// ─── Определение приветствий ───────────────────────────────
-const GREETING_PATTERNS = {
-  ru: /^(привет|хай|здравствуй(те)?|добрый\s(день|вечер|утро)|доброе\sутро|ку|хэй|йо)[!?,.\s]*$/i,
-  en: /^(hi|hello|hey|howdy|greetings|yo|sup|good\s(morning|evening|afternoon))[!?,.\s]*$/i,
-  uz: /^(salom|assalomu\salaykum|xayrli\s(kun|kech|tong))[!?,.\s]*$/i
-};
+// ─── Приветствия — мгновенный ответ без AI ────────────────
+const GREETINGS = [
+  'привет','хай','хэй','ку','здравствуй','здравствуйте',
+  'добрый день','добрый вечер','доброе утро',
+  'hi','hey','hello','howdy','yo','sup','greetings',
+  'good morning','good evening','good afternoon',
+  'salom','assalomu alaykum','xayrli kun','xayrli kech'
+];
 
 const GREETING_RESPONSES = {
-  ru: "Привет! О чём хотите узнать?",
-  en: "Hi! What would you like to know?",
-  uz: "Salom! Nima haqida bilmoqchisiz?"
+  ru: 'Привет! О чём хотите узнать?',
+  en: 'Hi! What would you like to know?',
+  uz: 'Salom! Nima haqida bilmoqchisiz?'
 };
 
-function isSimpleGreeting(message, lang) {
-  const pattern = GREETING_PATTERNS[lang] || GREETING_PATTERNS.ru;
-  // Дополнительно: если сообщение короче 4 слов — проверяем все языки
-  const trimmed = message.trim();
-  if (trimmed.split(/\s+/).length <= 3) {
-    return (
-      pattern.test(trimmed) ||
-      GREETING_PATTERNS.ru.test(trimmed) ||
-      GREETING_PATTERNS.en.test(trimmed) ||
-      GREETING_PATTERNS.uz.test(trimmed)
-    );
-  }
-  return pattern.test(trimmed);
+function isGreeting(message) {
+  const cleaned = message.trim().toLowerCase().replace(/[!?.,]+$/, '');
+  return GREETINGS.includes(cleaned);
 }
 
-// ─── Системные промпты ─────────────────────────────────────
+// ─── Системные промпты ────────────────────────────────────
 const systemPrompts = {
   ru: `Ты помощник-гид Медресе Улугбека в Самарканде.
+Правила: отвечай ТОЛЬКО на заданный вопрос, кратко (1-3 предложения).
+Подробности — только если явно попросили.
+Не начинай экскурсию сам по себе.
+Язык ответа: русский.`,
 
-СТРОГИЕ ПРАВИЛА:
-1. Отвечай ТОЛЬКО на заданный вопрос. Ни слова лишнего.
-2. Если вопрос простой — ответ короткий (1-3 предложения).
-3. Подробный ответ ТОЛЬКО если пользователь прямо просит рассказать подробнее или задаёт конкретный вопрос об истории, архитектуре, учёных.
-4. НЕ начинай экскурсию сам по себе. НЕ добавляй "кстати", "а ещё", "позвольте рассказать".
-5. Всегда отвечай на русском языке.`,
+  en: `You are a guide assistant at Ulugbek Madrasah in Samarkand.
+Rules: answer ONLY what was asked, briefly (1-3 sentences).
+Be detailed only if explicitly asked.
+Do not start a tour on your own.
+Always respond in English.`,
 
-  en: `You are an assistant guide at the Ulugbek Madrasah in Samarkand.
-
-STRICT RULES:
-1. Answer ONLY what was asked. Nothing extra.
-2. Simple question = short answer (1-3 sentences).
-3. Detailed answer ONLY if user explicitly asks for more or asks a specific question about history, architecture, or scholars.
-4. Do NOT start a tour on your own. Do NOT add "by the way", "also", "let me tell you about".
-5. Always respond in English.`,
-
-  uz: `Siz Samarqanddagi Ulugʻbek Madrasasining yordamchi gidisiz.
-
-QATTIQ QOIDALAR:
-1. FAQAT berilgan savolga javob bering. Ortiqcha hech narsa.
-2. Oddiy savol = qisqa javob (1-3 gap).
-3. Batafsil javob FAQAT foydalanuvchi aniq so'raganda yoki tarix, me'morchilik, olimlar haqida savol bo'lganda.
-4. O'zingizdan ekskursiya boshlamang.
-5. Har doim o'zbek tilida javob bering.`
+  uz: `Siz Samarqanddagi Ulugʻbek Madrasasi yordamchi gidisiz.
+Qoidalar: FAQAT so'ralgan savolga qisqa javob bering (1-3 gap).
+Batafsil faqat so'ralganda.
+O'zingizdan ekskursiya boshlamang.
+Til: o'zbek.`
 };
 
-// ─── Основной роут ─────────────────────────────────────────
+// ─── Роут чата ────────────────────────────────────────────
 app.post("/api/chat", async (req, res) => {
+  const { message, history = [], lang = "ru" } = req.body;
+
+  console.log(`\n[CHAT] lang=${lang} | message="${message}"`);
+
+  // Приветствие → мгновенный ответ
+  if (isGreeting(message)) {
+    const reply = GREETING_RESPONSES[lang] || GREETING_RESPONSES.ru;
+    console.log(`[CHAT] Greeting → "${reply}"`);
+    return res.json({ reply });
+  }
+
   try {
-    const { message, history = [], lang = "ru" } = req.body;
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      systemInstruction: systemPrompts[lang] || systemPrompts.ru
+    });
 
-    // Если это просто приветствие — отвечаем сразу, не идём в AI
-    if (isSimpleGreeting(message, lang)) {
-      const response = GREETING_RESPONSES[lang] || GREETING_RESPONSES.ru;
-      return res.json({ reply: response });
-    }
-
-    // Конвертируем историю в формат Gemini
-    const geminiHistory = [];
+    // Конвертируем историю чата в формат SDK
+    // Пропускаем первое AI-приветствие (история должна начинаться с user)
+    const chatHistory = [];
     for (const msg of history) {
       if (msg.sender === "user") {
-        geminiHistory.push({ role: "user", parts: [{ text: msg.text }] });
-      } else if (msg.sender === "ai" && geminiHistory.length > 0) {
-        geminiHistory.push({ role: "model", parts: [{ text: msg.text }] });
+        chatHistory.push({ role: "user", parts: [{ text: msg.text }] });
+      } else if (msg.sender === "ai" && chatHistory.length > 0) {
+        chatHistory.push({ role: "model", parts: [{ text: msg.text }] });
       }
     }
 
-    geminiHistory.push({ role: "user", parts: [{ text: message }] });
+    console.log(`[CHAT] История: ${chatHistory.length} сообщений`);
 
-    const systemPrompt = systemPrompts[lang] || systemPrompts.ru;
+    // Запускаем чат с историей
+    const chat = model.startChat({ history: chatHistory });
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          contents: geminiHistory,
-          generationConfig: {
-            temperature: 0.5,
-            maxOutputTokens: 512
-          }
-        })
-      }
-    );
+    // Отправляем текущее сообщение
+    const result = await chat.sendMessage(message);
+    const reply = result.response.text();
 
-    const data = await response.json();
-    const reply =
-      data.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "Ответ не получен.";
-
+    console.log(`[CHAT] Ответ: ${reply.substring(0, 100)}...`);
     res.json({ reply });
 
   } catch (error) {
-    console.error("Ошибка сервера:", error);
-    res.status(500).json({ reply: "Ошибка сервера." });
+    console.error("[CHAT] Ошибка:", error.message);
+    res.status(500).json({ reply: "Ошибка соединения с Gemini: " + error.message });
   }
 });
 
 app.listen(5001, () => {
-  console.log("Сервер запущен на порту 5001");
+  console.log("✅ Сервер запущен на порту 5001");
+  console.log(`🔑 API ключ: ${process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.substring(0, 8) + '...' : '⚠️ НЕ НАЙДЕН!'}`);
 });
