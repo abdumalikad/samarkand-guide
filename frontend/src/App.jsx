@@ -327,7 +327,7 @@ export default function App() {
   // ==========================================
   useEffect(() => {
     if (liveAudioRef.current && isLiveMode) { liveAudioRef.current.load(); }
-  }, [livePoi?.id, isLiveMode]);
+  }, [lang, isLiveMode]);
 
   useEffect(() => {
     const trackDurations = [180, 240, 210, 300, 150];
@@ -451,6 +451,11 @@ export default function App() {
     if (!poi) return '';
     const langMap = { ru: 'rus', en: 'eng', uz: 'uzb' };
     return `/Audio/${langMap[lang] || 'rus'}${poiData.findIndex(p => p.id === poi.id) + 1}.mp3`;
+  };
+
+  const getLiveAudioSrc = () => {
+    const langMap = { ru: 'ru', en: 'en', uz: 'uz' };
+    return `/Audio/live_${langMap[lang] || 'ru'}.mp3`;
   };
 
   const getSentences = (text) => text ? text.split(/(?<=[.!?])\s+/).filter(Boolean) : [];
@@ -678,7 +683,7 @@ export default function App() {
                 <input type="range" min="0" max={liveDuration || 100} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
                 <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(liveDuration)}</span>
               </div>
-              <audio ref={liveAudioRef} src={getAudioSrc(livePoi)} preload="auto" />
+              <audio ref={liveAudioRef} src={getLiveAudioSrc()} preload="auto" />
             </div>
           ) : (
             <div className="text-center py-6 flex flex-col items-center justify-center flex-1 gap-4">
