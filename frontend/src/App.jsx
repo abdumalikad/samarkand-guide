@@ -5,7 +5,6 @@ import { poiData } from './data/poiData';
 // GEMINI API — ПРЯМО В БРАУЗЕРЕ (без бэкенда)
 // API ключ берётся из переменной окружения Vite
 // ==========================================
-
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 const GREETINGS = [
@@ -34,20 +33,17 @@ function isGreeting(message) {
 }
 
 async function askGemini(message, history, lang) {
-  // Приветствие — мгновенный ответ без запроса к API
   if (isGreeting(message)) {
     return GREETING_RESPONSES[lang] || GREETING_RESPONSES.ru;
   }
 
   const systemPrompt = systemPrompts[lang] || systemPrompts.ru;
 
-  // Системный промпт передаём как первый обмен
   const contents = [
     { role: 'user', parts: [{ text: systemPrompt }] },
     { role: 'model', parts: [{ text: 'Понял, следую правилам.' }] }
   ];
 
-  // Добавляем историю (пропускаем первое AI-приветствие)
   for (const msg of history) {
     if (msg.sender === 'user') {
       contents.push({ role: 'user', parts: [{ text: msg.text }] });
@@ -56,7 +52,6 @@ async function askGemini(message, history, lang) {
     }
   }
 
-  // Текущее сообщение
   contents.push({ role: 'user', parts: [{ text: message }] });
 
   const response = await fetch(
@@ -181,14 +176,19 @@ export default function App() {
   const [fontScale, setFontScale] = useState(1);
   const [showFontSlider, setShowFontSlider] = useState(false);
 
-  // LIVE СЕАНС
+  // ==========================================
+  // LIVE СЕАНС (ЕДИНЫЙ ТРЕК НА 241 СЕКУНДУ)
+  // ==========================================
+  const LIVE_DURATION = 241; // 4 мин 1 сек
+  
   const [isLiveMode, setIsLiveMode] = useState(false);
   const [isAdminLive, setIsAdminLive] = useState(false);
   const [liveCountdown, setLiveCountdown] = useState('00:00');
-  const [livePoi, setLivePoi] = useState(null);
+  
+  // Заменяем livePoi на глобальный флаг активности
+  const [isLiveActive, setIsLiveActive] = useState(false);
   const [liveSentenceIndex, setLiveSentenceIndex] = useState(-1);
   const [liveProgress, setLiveProgress] = useState(0);
-  const [liveDuration, setLiveDuration] = useState(0);
 
   // ИИ-ЧАТ С ВКЛАДКАМИ
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -212,8 +212,26 @@ export default function App() {
   const audioRef = useRef(null);
   const liveAudioRef = useRef(null);
   const chatEndRef = useRef(null);
+  const liveTextContainerRef = useRef(null);
+  const activeSentenceRef = useRef(null);
   const t = translations[lang];
 
+  // ==========================================
+  // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+  // ==========================================
+  const getSentences = (text) => text ? text.split(/(?<=[.!?])\s+/).filter(Boolean) : [];
+
+  // Функция собирает ВЕСЬ текст со всех зон в единую ленту
+  const getLiveSentences = (currentLang) => {
+    return poiData.flatMap(poi => getSentences(poi.fullText[currentLang]));
+  };
+
+  const formatTime = (time) => {
+    if (isNaN(time)) return '00:00';
+    return `${Math.floor(time / 60).toString().padStart(2, '0')}:${Math.floor(time % 60).toString().padStart(2, '0')}`;
+  };
+
+  // DRAG & DROP
   const handleDragStart = (e) => {
     isDragging.current = true;
     dragStart.current = { x: e.clientX - sessionPos.x, y: e.clientY - sessionPos.y };
@@ -233,16 +251,13 @@ export default function App() {
     };
   }, [sessionPos]);
 
-  // Автоскролл чата
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatMessages, isChatOpen]);
 
-  // ==========================================
   // ФУНКЦИИ ВКЛАДОК
-  // ==========================================
   const addNewTab = () => {
     const newId = Date.now();
     setChatTabs(prev => [
@@ -270,19 +285,14 @@ export default function App() {
     ));
   };
 
-  // ==========================================
-  // ОТПРАВКА СООБЩЕНИЯ — GEMINI НАПРЯМУЮ
-  // ==========================================
+  // ОТПРАВКА СООБЩЕНИЯ
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
 
     const userMessage = { sender: 'user', text: chatInput };
     const updatedMessages = [...chatMessages, userMessage];
-
-    setChatTabs(prev => prev.map(tab =>
-      tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab
-    ));
+    setChatTabs(prev => prev.map(tab => tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab));
     setChatInput('');
     setIsAiTyping(true);
 
@@ -305,9 +315,7 @@ export default function App() {
     }
   };
 
-  // ==========================================
-  // АДМИН: ПРИНУДИТЕЛЬНЫЙ ЗАПУСК
-  // ==========================================
+  // АДМИН
   const handleAdminForceStart = () => {
     const now = new Date();
     const remainingMins = 59 - now.getMinutes();
@@ -323,15 +331,33 @@ export default function App() {
   };
 
   // ==========================================
-  // СИНХРОНИЗАЦИЯ СЕАНСОВ
+  // СИНХРОНИЗАЦИЯ ЕДИНОГО СЕАНСА
   // ==========================================
+  
+  // Автоскролл текста караоке
   useEffect(() => {
-    if (liveAudioRef.current && isLiveMode) { liveAudioRef.current.load(); }
-  }, [lang, isLiveMode]);
+    if (activeSentenceRef.current && liveTextContainerRef.current) {
+      const container = liveTextContainerRef.current;
+      const el = activeSentenceRef.current;
+      container.scrollTo({
+        top: el.offsetTop - container.offsetTop - (container.clientHeight / 2) + (el.clientHeight / 2),
+        behavior: 'smooth'
+      });
+    }
+  }, [liveSentenceIndex]);
 
+  // Мгновенная синхронизация времени при смене языка на ходу
   useEffect(() => {
-    const trackDurations = [180, 240, 210, 300, 150];
+    if (liveAudioRef.current && isLiveMode && isLiveActive) {
+      const now = new Date();
+      const elapsed = isAdminLive ? adminTimeRef.current : (now.getMinutes() * 60 + now.getSeconds());
+      liveAudioRef.current.currentTime = elapsed;
+      liveAudioRef.current.play().catch(() => {});
+    }
+  }, [lang]);
 
+  // Таймер единого сеанса
+  useEffect(() => {
     const syncLiveSession = () => {
       const now = new Date();
       const mins = now.getMinutes();
@@ -339,49 +365,39 @@ export default function App() {
       setLiveCountdown(`${(59 - mins).toString().padStart(2, '0')}:${(59 - secs).toString().padStart(2, '0')}`);
 
       let elapsedSeconds = isAdminLive ? adminTimeRef.current : (mins * 60 + secs);
-      let cumulativeTime = 0;
-      let currentActivePoi = null;
-      let calculatedSentenceIndex = -1;
-      let targetTrackTime = 0;
-      let activeTrackDuration = 0;
 
-      for (let i = 0; i < poiData.length; i++) {
-        const d = trackDurations[i] || 180;
-        if (elapsedSeconds >= cumulativeTime && elapsedSeconds < cumulativeTime + d) {
-          currentActivePoi = poiData[i];
-          targetTrackTime = elapsedSeconds - cumulativeTime;
-          activeTrackDuration = d;
-          break;
-        }
-        cumulativeTime += d;
-      }
-
-      setLivePoi(currentActivePoi);
-
-      if (currentActivePoi) {
+      // Проверка: сеанс идет ровно 241 секунду
+      if (elapsedSeconds <= LIVE_DURATION) {
+        setIsLiveActive(true);
         hasSessionPlayed.current = true;
-        setLiveProgress(targetTrackTime);
-        setLiveDuration(activeTrackDuration);
+        setLiveProgress(elapsedSeconds);
+
         if (isLiveMode && liveAudioRef.current) {
           const audioEl = liveAudioRef.current;
-          const actualDuration = audioEl.duration || Infinity;
-          if (targetTrackTime < actualDuration) {
-            if (Math.abs(audioEl.currentTime - targetTrackTime) > 2) audioEl.currentTime = targetTrackTime;
-            if (audioEl.paused) audioEl.play().catch(() => {});
-            if (currentActivePoi?.fullText?.[lang]) {
-              const sentences = getSentences(currentActivePoi.fullText[lang]);
-              calculatedSentenceIndex = Math.min(Math.floor((targetTrackTime / actualDuration) * sentences.length), sentences.length - 1);
-            }
-          } else {
-            if (!audioEl.paused) audioEl.pause();
-            calculatedSentenceIndex = -1;
+          
+          // Жесткая синхронизация времени
+          if (Math.abs(audioEl.currentTime - elapsedSeconds) > 1.5) {
+            audioEl.currentTime = elapsedSeconds;
           }
+          if (audioEl.paused) {
+            audioEl.play().catch(() => {});
+          }
+
+          // Высчитываем индекс текущего предложения на основе общего прогресса
+          const sentences = getLiveSentences(lang);
+          const progressRatio = elapsedSeconds / LIVE_DURATION;
+          const calculatedIndex = Math.min(Math.floor(progressRatio * sentences.length), sentences.length - 1);
+          setLiveSentenceIndex(calculatedIndex);
         }
-        setLiveSentenceIndex(calculatedSentenceIndex);
         if (isAdminLive) adminTimeRef.current += 1;
       } else {
-        setLiveProgress(0); setLiveDuration(0); setLiveSentenceIndex(-1);
+        // Сеанс завершен
+        setIsLiveActive(false);
+        setLiveProgress(0);
+        setLiveSentenceIndex(-1);
+        
         if (liveAudioRef.current && !liveAudioRef.current.paused) liveAudioRef.current.pause();
+        
         if (hasSessionPlayed.current) {
           setChatTabs(prev => prev.map(tab =>
             tab.id === activeTabId
@@ -420,19 +436,16 @@ export default function App() {
   };
 
   const handleLoadedMetadata = () => { if (audioRef.current) setDuration(audioRef.current.duration); };
-
   const handleSeek = (e) => {
     const t2 = Number(e.target.value);
     if (audioRef.current) { audioRef.current.currentTime = t2; setProgress(t2); }
   };
-
   const skip = (amount) => {
     if (audioRef.current) {
       audioRef.current.currentTime = Math.max(0, Math.min(audioRef.current.currentTime + amount, duration || 0));
       setProgress(audioRef.current.currentTime);
     }
   };
-
   const handleNextTrack = () => {
     const idx = poiData.findIndex(p => p.id === selectedPoi.id);
     if (idx !== -1 && idx < poiData.length - 1) { setSelectedPoi(poiData[idx + 1]); setIsPlaying(true); }
@@ -453,15 +466,10 @@ export default function App() {
     return `/Audio/${langMap[lang] || 'rus'}${poiData.findIndex(p => p.id === poi.id) + 1}.mp3`;
   };
 
+  // Возвращает единый трек для режима сеанса
   const getLiveAudioSrc = () => {
     const langMap = { ru: 'ru', en: 'en', uz: 'uz' };
     return `/Audio/live_${langMap[lang] || 'ru'}.mp3`;
-  };
-
-  const getSentences = (text) => text ? text.split(/(?<=[.!?])\s+/).filter(Boolean) : [];
-  const formatTime = (time) => {
-    if (isNaN(time)) return '00:00';
-    return `${Math.floor(time / 60).toString().padStart(2, '0')}:${Math.floor(time % 60).toString().padStart(2, '0')}`;
   };
 
   // ==========================================
@@ -496,7 +504,7 @@ export default function App() {
   const getRegionClass = (id) => selectedPoi.id === id
     ? (highContrast ? 'fill-yellow-400/40 stroke-yellow-400 stroke-2' : 'fill-[#38bdf8]/30 stroke-[#38bdf8] stroke-2')
     : (highContrast ? 'fill-transparent stroke-yellow-400/40 hover:fill-yellow-400/10' : 'fill-transparent stroke-[#475569]/60 hover:fill-[#38bdf8]/10');
-
+    
   const getLabelClass = (id) => selectedPoi.id === id
     ? (highContrast ? 'fill-yellow-400 font-bold' : 'fill-[#38bdf8] font-bold')
     : (highContrast ? 'fill-yellow-400/60 group-hover:fill-yellow-400' : 'fill-[#64748b] group-hover:fill-white');
@@ -527,9 +535,9 @@ export default function App() {
                 </div>
               )}
             </div>
-            <button onClick={() => { setIsLiveMode(true); if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); } }} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex items-center gap-2 shadow-sm ${tSize.xs} ${livePoi || isLiveMode ? 'bg-red-600 text-white border-red-600 animate-pulse' : (highContrast ? 'bg-zinc-900 text-yellow-400 border-yellow-400' : 'bg-stone-100 text-stone-700 border-stone-300')}`}>
-              <span className={`w-2 h-2 rounded-full ${livePoi || isLiveMode ? 'bg-white' : 'bg-red-500'}`}></span>
-              {livePoi && isLiveMode ? t.liveBtnActive : `${t.liveBtnWait}${liveCountdown}`}
+            <button onClick={() => { setIsLiveMode(true); if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); } }} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex items-center gap-2 shadow-sm ${tSize.xs} ${isLiveActive || isLiveMode ? 'bg-red-600 text-white border-red-600 animate-pulse' : (highContrast ? 'bg-zinc-900 text-yellow-400 border-yellow-400' : 'bg-stone-100 text-stone-700 border-stone-300')}`}>
+              <span className={`w-2 h-2 rounded-full ${isLiveActive || isLiveMode ? 'bg-white' : 'bg-red-500'}`}></span>
+              {isLiveActive && isLiveMode ? t.liveBtnActive : `${t.liveBtnWait}${liveCountdown}`}
             </button>
           </div>
           <div className={`flex gap-1 p-1 rounded-xl border ${highContrast ? 'bg-zinc-900 border-yellow-400' : 'bg-stone-100 border-stone-200'}`}>
@@ -548,7 +556,7 @@ export default function App() {
         <p className={`max-w-2xl mx-auto font-light ${tSize.base} ${theme.textUltraMuted}`}>{t.subtitle}</p>
       </section>
 
-      {/* EXPLORER */}
+      {/* EXPLORER (Свободный режим) */}
       <section className="flex-grow max-w-7xl w-full mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative">
         <div className={`p-6 md:p-8 rounded-3xl border w-full ${theme.panel}`}>
           <div className="mb-6">
@@ -653,12 +661,12 @@ export default function App() {
         </div>
       </section>
 
-      {/* ВИДЖЕТ СЕАНСА */}
+      {/* ВИДЖЕТ ЕДИНОГО СЕАНСА */}
       {isLiveMode && (
         <div style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }} className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] h-[380px] min-w-[280px] min-h-[250px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col gap-4 shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
           <div onPointerDown={handleDragStart} className={`flex justify-between items-center border-b pb-3 cursor-move select-none touch-none ${theme.border}`}>
             <h3 className={`font-serif font-bold flex items-center gap-3 ${tSize.lg} ${theme.textMain}`}>
-              <span className={`w-3 h-3 rounded-full ${livePoi ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
+              <span className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
               {isAdminLive ? '⚡ Админ-сеанс' : t.liveModalTitle}
             </h3>
             <div className="flex items-center gap-3" onPointerDown={(e) => e.stopPropagation()}>
@@ -666,22 +674,31 @@ export default function App() {
               <button onClick={() => { setIsLiveMode(false); setIsAdminLive(false); if (liveAudioRef.current) liveAudioRef.current.pause(); }} className={`text-2xl font-bold transition-opacity hover:opacity-50 ${theme.textMain}`}>✕</button>
             </div>
           </div>
-          {livePoi ? (
+          {isLiveActive ? (
             <div className="flex flex-col gap-3 flex-1 overflow-hidden">
-              <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>{livePoi.title[lang]}</h4>
-              <div className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3">
+              <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>{t.title}</h4>
+              
+              <div ref={liveTextContainerRef} className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3 relative">
                 <p className={`text-justify font-medium ${tSize.sm} ${theme.textMain}`}>
-                  {getSentences(livePoi.fullText[lang]).map((sentence, index) => (
-                    <span key={index} className={`transition-all duration-300 ${index === liveSentenceIndex ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}>
-                      {sentence}{' '}
-                    </span>
-                  ))}
+                  {getLiveSentences(lang).map((sentence, index) => {
+                    const isKaraokeActive = index === liveSentenceIndex;
+                    return (
+                      <span 
+                        key={index} 
+                        ref={isKaraokeActive ? activeSentenceRef : null}
+                        className={`transition-all duration-300 ${isKaraokeActive ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}
+                      >
+                        {sentence}{' '}
+                      </span>
+                    );
+                  })}
                 </p>
               </div>
+              
               <div className={`mt-auto flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
                 <span className={`text-xs font-mono w-10 text-right ${theme.textUltraMuted}`}>{formatTime(liveProgress)}</span>
-                <input type="range" min="0" max={liveDuration || 100} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
-                <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(liveDuration)}</span>
+                <input type="range" min="0" max={LIVE_DURATION} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
+                <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(LIVE_DURATION)}</span>
               </div>
               <audio ref={liveAudioRef} src={getLiveAudioSrc()} preload="auto" />
             </div>
