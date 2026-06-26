@@ -1,9 +1,87 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { poiData } from './data/poiData';
-import { Analytics } from '@vercel/analytics/react';
 
 // ==========================================
-// MOCK DATA И ПЕРЕВОДЫ
+// GEMINI API — ПРЯМО В БРАУЗЕРЕ (без бэкенда)
+// API ключ берётся из переменной окружения Vite
+// ==========================================
+
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
+const GREETINGS = [
+  'привет','хай','хэй','ку','здравствуй','здравствуйте',
+  'добрый день','добрый вечер','доброе утро',
+  'hi','hey','hello','howdy','yo','sup','greetings',
+  'good morning','good evening','good afternoon',
+  'salom','assalomu alaykum','xayrli kun','xayrli kech'
+];
+
+const GREETING_RESPONSES = {
+  ru: 'Привет! О чём хотите узнать?',
+  en: 'Hi! What would you like to know?',
+  uz: 'Salom! Nima haqida bilmoqchisiz?'
+};
+
+const systemPrompts = {
+  ru: `Ты помощник-гид Медресе Улугбека в Самарканде. Отвечай ТОЛЬКО на заданный вопрос, кратко (1-3 предложения). Подробности — только если явно попросили. Не начинай экскурсию сам по себе. Язык: русский.`,
+  en: `You are a guide assistant at Ulugbek Madrasah in Samarkand. Answer ONLY what was asked, briefly (1-3 sentences). Be detailed only if explicitly asked. Do not start a tour on your own. Language: English.`,
+  uz: `Siz Samarqanddagi Ulugʻbek Madrasasi yordamchi gidisiz. FAQAT so'ralgan savolga qisqa javob bering (1-3 gap). Batafsil faqat so'ralganda. Til: o'zbek.`
+};
+
+function isGreeting(message) {
+  const cleaned = message.trim().toLowerCase().replace(/[!?.,]+$/, '');
+  return GREETINGS.includes(cleaned);
+}
+
+async function askGemini(message, history, lang) {
+  // Приветствие — мгновенный ответ без запроса к API
+  if (isGreeting(message)) {
+    return GREETING_RESPONSES[lang] || GREETING_RESPONSES.ru;
+  }
+
+  const systemPrompt = systemPrompts[lang] || systemPrompts.ru;
+
+  // Системный промпт передаём как первый обмен
+  const contents = [
+    { role: 'user', parts: [{ text: systemPrompt }] },
+    { role: 'model', parts: [{ text: 'Понял, следую правилам.' }] }
+  ];
+
+  // Добавляем историю (пропускаем первое AI-приветствие)
+  for (const msg of history) {
+    if (msg.sender === 'user') {
+      contents.push({ role: 'user', parts: [{ text: msg.text }] });
+    } else if (msg.sender === 'ai' && contents.length > 2) {
+      contents.push({ role: 'model', parts: [{ text: msg.text }] });
+    }
+  }
+
+  // Текущее сообщение
+  contents.push({ role: 'user', parts: [{ text: message }] });
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents,
+        generationConfig: { temperature: 0.5, maxOutputTokens: 512 }
+      })
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.error?.message || 'Gemini API error');
+  }
+
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'Ответ не получен.';
+}
+
+// ==========================================
+// ПЕРЕВОДЫ
 // ==========================================
 const translations = {
   ru: {
@@ -29,8 +107,10 @@ const translations = {
     chatTitle: 'AI-Гид Медресе',
     chatInput: 'Задайте вопрос об истории...',
     chatWelcomeDefault: 'Здравствуйте! Есть ли у вас вопросы об архитектуре или истории Медресе Улугбека?',
-    chatWelcomeAfter: 'Здравствуйте! Экскурсия завершена. Есть ли у вас вопросы об архитектуре или истории Медресе Улугбека?',
-    aiTyping: 'ИИ печатает...'
+    chatWelcomeAfter: 'Здравствуйте! Экскурсия завершена. Есть ли у вас вопросы?',
+    aiTyping: 'ИИ печатает...',
+    newChat: 'Новый чат',
+    clearChat: 'Очистить',
   },
   en: {
     title: 'Ulugbek Madrasah Digital Museum',
@@ -55,8 +135,10 @@ const translations = {
     chatTitle: 'AI Madrasah Guide',
     chatInput: 'Ask a question about the history...',
     chatWelcomeDefault: 'Hello! Do you have any questions about the architecture or history of the Ulugbek Madrasah?',
-    chatWelcomeAfter: 'Hello! The tour has ended. Do you have any questions about the architecture or history of the Ulugbek Madrasah?',
-    aiTyping: 'AI is typing...'
+    chatWelcomeAfter: 'Hello! The tour has ended. Do you have any questions?',
+    aiTyping: 'AI is typing...',
+    newChat: 'New chat',
+    clearChat: 'Clear',
   },
   uz: {
     title: 'Ulugʻbek Madrasasi Raqamli Muzeyi',
@@ -81,8 +163,10 @@ const translations = {
     chatTitle: 'AI Madrasa Gidi',
     chatInput: 'Tarix haqida savol bering...',
     chatWelcomeDefault: 'Assalomu alaykum! Ulugʻbek madrasasining meʼmorchiligi yoki tarixi haqida savollaringiz bormi?',
-    chatWelcomeAfter: 'Assalomu alaykum! Ekskursiya yakunlandi. Ulugʻbek madrasasining meʼmorchiligi yoki tarixi haqida savollaringiz bormi?',
-    aiTyping: 'AI yozmoqda...'
+    chatWelcomeAfter: 'Assalomu alaykum! Ekskursiya yakunlandi. Savollaringiz bormi?',
+    aiTyping: 'AI yozmoqda...',
+    newChat: 'Yangi chat',
+    clearChat: 'Tozalash',
   }
 };
 
@@ -94,24 +178,19 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [highContrast, setHighContrast] = useState(false);
-  
-  // Плавная регулировка шрифта: множитель от 1.0 до 2.0
   const [fontScale, setFontScale] = useState(1);
   const [showFontSlider, setShowFontSlider] = useState(false);
 
-  // ==========================================
-  // LIVE СЕАНС (ЕДИНЫЙ ТРЕК НА 4 МИНУТЫ 1 СЕК)
-  // ==========================================
-  const LIVE_DURATION = 241; // Ровно 241 секунда для всех языков
-  
+  // LIVE СЕАНС
   const [isLiveMode, setIsLiveMode] = useState(false);
   const [isAdminLive, setIsAdminLive] = useState(false);
   const [liveCountdown, setLiveCountdown] = useState('00:00');
-  const [isLiveActive, setIsLiveActive] = useState(false);
+  const [livePoi, setLivePoi] = useState(null);
   const [liveSentenceIndex, setLiveSentenceIndex] = useState(-1);
   const [liveProgress, setLiveProgress] = useState(0);
+  const [liveDuration, setLiveDuration] = useState(0);
 
-  // ИИ-ЧАТ СОСТОЯНИЯ
+  // ИИ-ЧАТ С ВКЛАДКАМИ
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [isAiTyping, setIsAiTyping] = useState(false);
@@ -119,114 +198,22 @@ export default function App() {
     { id: 1, name: 'Чат 1', messages: [{ sender: 'ai', text: translations['ru'].chatWelcomeDefault }] }
   ]);
   const [activeTabId, setActiveTabId] = useState(1);
- 
+
   const activeTab = chatTabs.find(tab => tab.id === activeTabId) || chatTabs[0];
   const chatMessages = activeTab?.messages || [];
 
-  // Координаты для свободного перемещения окна сеанса
+  // Перемещение окна сеанса
   const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
 
-  // Рефы
   const adminTimeRef = useRef(0);
   const hasSessionPlayed = useRef(false);
   const audioRef = useRef(null);
   const liveAudioRef = useRef(null);
   const chatEndRef = useRef(null);
-  const liveTextContainerRef = useRef(null);
-  const activeSentenceRef = useRef(null);
   const t = translations[lang];
 
-  // ==========================================
-  // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-  // ==========================================
-  
-  // Разбивка на предложения
-  const getSentences = (text) => {
-    if (!text) return [];
-    return text.split(/(?<=[.!?])\s+/).filter(Boolean);
-  };
-
-  // Сборка всего текста со всех точек POI в единый массив предложений для сеанса
-  const getLiveSentences = (currentLang) => {
-    return poiData.flatMap(poi => getSentences(poi.fullText[currentLang]));
-  };
-
-  const formatTime = (time) => {
-    if (isNaN(time)) return "00:00";
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  // ==========================================
-  // ФУНКЦИИ ЧАТА (ВКЛАДКИ И ОТПРАВКА)
-  // ==========================================
-  const addNewTab = () => {
-    const newId = Date.now();
-    setChatTabs(prev => [
-      ...prev,
-      {
-        id: newId,
-        name: `Чат ${prev.length + 1}`,
-        messages: [{ sender: 'ai', text: t.chatWelcomeDefault }]
-      }
-    ]);
-    setActiveTabId(newId);
-  };
- 
-  const deleteTab = (tabId) => {
-    if (chatTabs.length === 1) {
-      setChatTabs([{ id: activeTabId, name: 'Чат 1', messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }]);
-      return;
-    }
-    const remaining = chatTabs.filter(tab => tab.id !== tabId);
-    setChatTabs(remaining);
-    if (activeTabId === tabId) {
-      setActiveTabId(remaining[remaining.length - 1].id);
-    }
-  };
-
-  const clearChat = () => {
-    setChatTabs(prev => prev.map(tab =>
-      tab.id === activeTabId ? { ...tab, messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] } : tab
-    ));
-  };
-
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
- 
-    const userMessage = { sender: 'user', text: chatInput };
-    const updatedMessages = [...chatMessages, userMessage];
-    
-    setChatTabs(prev => prev.map(tab => tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab));
-    setChatInput('');
-    setIsAiTyping(true);
- 
-    try {
-      const response = await fetch('https://samarkand-guide.onrender.com/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: chatInput, history: chatMessages, lang: lang })
-      });
-      const data = await response.json();
-      setChatTabs(prev => prev.map(tab =>
-        tab.id === activeTabId ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: data.reply }] } : tab
-      ));
-    } catch (error) {
-      setChatTabs(prev => prev.map(tab =>
-        tab.id === activeTabId ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: 'Ошибка соединения с сервером.' }] } : tab
-      ));
-    } finally {
-      setIsAiTyping(false);
-    }
-  };
-
-  // ==========================================
-  // ПЕРЕМЕЩЕНИЕ ОКНА (DRAG & DROP)
-  // ==========================================
   const handleDragStart = (e) => {
     isDragging.current = true;
     dragStart.current = { x: e.clientX - sessionPos.x, y: e.clientY - sessionPos.y };
@@ -235,13 +222,9 @@ export default function App() {
   useEffect(() => {
     const handleDragMove = (e) => {
       if (!isDragging.current) return;
-      setSessionPos({
-        x: e.clientX - dragStart.current.x,
-        y: e.clientY - dragStart.current.y
-      });
+      setSessionPos({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y });
     };
     const handleDragEnd = () => { isDragging.current = false; };
-
     window.addEventListener('pointermove', handleDragMove);
     window.addEventListener('pointerup', handleDragEnd);
     return () => {
@@ -250,6 +233,7 @@ export default function App() {
     };
   }, [sessionPos]);
 
+  // Автоскролл чата
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -257,121 +241,157 @@ export default function App() {
   }, [chatMessages, isChatOpen]);
 
   // ==========================================
-  // АУДИО (СВОБОДНЫЙ РЕЖИМ)
+  // ФУНКЦИИ ВКЛАДОК
   // ==========================================
-  const getAudioSrc = (poi) => {
-    if (!poi) return '';
-    const langMap = { ru: 'rus', en: 'eng', uz: 'uzb' };
-    const prefix = langMap[lang] || 'rus';
-    const index = poiData.findIndex(p => p.id === poi.id);
-    const fileNumber = index !== -1 ? index + 1 : 1;
-    return `/Audio/${prefix}${fileNumber}.mp3`;
+  const addNewTab = () => {
+    const newId = Date.now();
+    setChatTabs(prev => [
+      ...prev,
+      { id: newId, name: `Чат ${prev.length + 1}`, messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }
+    ]);
+    setActiveTabId(newId);
   };
 
+  const deleteTab = (tabId) => {
+    if (chatTabs.length === 1) {
+      setChatTabs([{ id: activeTabId, name: 'Чат 1', messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }]);
+      return;
+    }
+    const remaining = chatTabs.filter(tab => tab.id !== tabId);
+    setChatTabs(remaining);
+    if (activeTabId === tabId) setActiveTabId(remaining[remaining.length - 1].id);
+  };
+
+  const clearChat = () => {
+    setChatTabs(prev => prev.map(tab =>
+      tab.id === activeTabId
+        ? { ...tab, messages: [{ sender: 'ai', text: t.chatWelcomeDefault }] }
+        : tab
+    ));
+  };
+
+  // ==========================================
+  // ОТПРАВКА СООБЩЕНИЯ — GEMINI НАПРЯМУЮ
+  // ==========================================
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const userMessage = { sender: 'user', text: chatInput };
+    const updatedMessages = [...chatMessages, userMessage];
+
+    setChatTabs(prev => prev.map(tab =>
+      tab.id === activeTabId ? { ...tab, messages: updatedMessages } : tab
+    ));
+    setChatInput('');
+    setIsAiTyping(true);
+
+    try {
+      const reply = await askGemini(chatInput, chatMessages, lang);
+      setChatTabs(prev => prev.map(tab =>
+        tab.id === activeTabId
+          ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: reply }] }
+          : tab
+      ));
+    } catch (error) {
+      console.error('Gemini error:', error);
+      setChatTabs(prev => prev.map(tab =>
+        tab.id === activeTabId
+          ? { ...tab, messages: [...updatedMessages, { sender: 'ai', text: 'Ошибка соединения с Gemini: ' + error.message }] }
+          : tab
+      ));
+    } finally {
+      setIsAiTyping(false);
+    }
+  };
+
+  // ==========================================
+  // АДМИН: ПРИНУДИТЕЛЬНЫЙ ЗАПУСК
+  // ==========================================
   const handleAdminForceStart = () => {
     const now = new Date();
     const remainingMins = 59 - now.getMinutes();
-
-    if (remainingMins < 10) {
-      alert(t.adminWaitMessage);
-      return;
-    }
-
+    if (remainingMins < 10) { alert(t.adminWaitMessage); return; }
     const pin = prompt(t.enterAdminPin);
-    if (pin === '1417') { 
+    if (pin === '1417') {
       adminTimeRef.current = 0;
       setIsAdminLive(true);
-      if (isPlaying && audioRef.current) {
-        audioRef.current.pause();
-        setIsPlaying(false);
-      }
+      if (isPlaying && audioRef.current) { audioRef.current.pause(); setIsPlaying(false); }
     } else if (pin !== null) {
       alert(t.wrongPin);
     }
   };
 
   // ==========================================
-  // 🌟 СИНХРОНИЗАЦИЯ ЕДИНОГО СЕАНСА
+  // СИНХРОНИЗАЦИЯ СЕАНСОВ
   // ==========================================
-  
-  // Автоскролл текста караоке в окне сеанса
   useEffect(() => {
-    if (activeSentenceRef.current && liveTextContainerRef.current) {
-      const container = liveTextContainerRef.current;
-      const el = activeSentenceRef.current;
-      container.scrollTo({
-        top: el.offsetTop - container.offsetTop - (container.clientHeight / 2) + (el.clientHeight / 2),
-        behavior: 'smooth'
-      });
-    }
-  }, [liveSentenceIndex]);
+    if (liveAudioRef.current && isLiveMode) { liveAudioRef.current.load(); }
+  }, [livePoi?.id, isLiveMode]);
 
-  // Главный таймер сеанса
   useEffect(() => {
+    const trackDurations = [180, 240, 210, 300, 150];
+
     const syncLiveSession = () => {
       const now = new Date();
       const mins = now.getMinutes();
       const secs = now.getSeconds();
-
-      const remainingMins = 59 - mins;
-      const remainingSecs = 59 - secs;
-      setLiveCountdown(`${remainingMins.toString().padStart(2, '0')}:${remainingSecs.toString().padStart(2, '0')}`);
+      setLiveCountdown(`${(59 - mins).toString().padStart(2, '0')}:${(59 - secs).toString().padStart(2, '0')}`);
 
       let elapsedSeconds = isAdminLive ? adminTimeRef.current : (mins * 60 + secs);
+      let cumulativeTime = 0;
+      let currentActivePoi = null;
+      let calculatedSentenceIndex = -1;
+      let targetTrackTime = 0;
+      let activeTrackDuration = 0;
 
-      // Проверяем, вписываемся ли мы в лимит 4 мин 1 сек (241 сек)
-      if (elapsedSeconds <= LIVE_DURATION) {
-        setIsLiveActive(true);
+      for (let i = 0; i < poiData.length; i++) {
+        const d = trackDurations[i] || 180;
+        if (elapsedSeconds >= cumulativeTime && elapsedSeconds < cumulativeTime + d) {
+          currentActivePoi = poiData[i];
+          targetTrackTime = elapsedSeconds - cumulativeTime;
+          activeTrackDuration = d;
+          break;
+        }
+        cumulativeTime += d;
+      }
+
+      setLivePoi(currentActivePoi);
+
+      if (currentActivePoi) {
         hasSessionPlayed.current = true;
-        setLiveProgress(elapsedSeconds);
-
+        setLiveProgress(targetTrackTime);
+        setLiveDuration(activeTrackDuration);
         if (isLiveMode && liveAudioRef.current) {
           const audioEl = liveAudioRef.current;
-
-          // Жесткая синхронизация: если плеер отстал или убежал, или сменился язык
-          if (Math.abs(audioEl.currentTime - elapsedSeconds) > 1.5) {
-            audioEl.currentTime = elapsedSeconds;
+          const actualDuration = audioEl.duration || Infinity;
+          if (targetTrackTime < actualDuration) {
+            if (Math.abs(audioEl.currentTime - targetTrackTime) > 2) audioEl.currentTime = targetTrackTime;
+            if (audioEl.paused) audioEl.play().catch(() => {});
+            if (currentActivePoi?.fullText?.[lang]) {
+              const sentences = getSentences(currentActivePoi.fullText[lang]);
+              calculatedSentenceIndex = Math.min(Math.floor((targetTrackTime / actualDuration) * sentences.length), sentences.length - 1);
+            }
+          } else {
+            if (!audioEl.paused) audioEl.pause();
+            calculatedSentenceIndex = -1;
           }
-          
-          if (audioEl.paused) {
-            audioEl.play().catch(err => console.log("Live playback block:", err));
-          }
-
-          // Высчитываем, какое предложение сейчас должно подсвечиваться
-          const sentences = getLiveSentences(lang);
-          const progressRatio = elapsedSeconds / LIVE_DURATION;
-          const calculatedSentenceIndex = Math.min(
-            Math.floor(progressRatio * sentences.length),
-            sentences.length - 1
-          );
-          setLiveSentenceIndex(calculatedSentenceIndex);
         }
-        
+        setLiveSentenceIndex(calculatedSentenceIndex);
         if (isAdminLive) adminTimeRef.current += 1;
-        
       } else {
-        // СЕАНС ЗАВЕРШЕН (или еще не начался)
-        setIsLiveActive(false);
-        setLiveProgress(0);
-        setLiveSentenceIndex(-1);
-        
-        if (liveAudioRef.current && !liveAudioRef.current.paused) {
-          liveAudioRef.current.pause();
-        }
-        
-        // Открываем чат после сеанса
+        setLiveProgress(0); setLiveDuration(0); setLiveSentenceIndex(-1);
+        if (liveAudioRef.current && !liveAudioRef.current.paused) liveAudioRef.current.pause();
         if (hasSessionPlayed.current) {
           setChatTabs(prev => prev.map(tab =>
-            tab.id === activeTabId ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] } : tab
+            tab.id === activeTabId
+              ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] }
+              : tab
           ));
           setIsChatOpen(true);
           hasSessionPlayed.current = false;
         }
-
-        if (isAdminLive) {
-          setIsAdminLive(false);
-          setIsLiveMode(false);
-        }
+        if (isAdminLive) { setIsAdminLive(false); setIsLiveMode(false); }
       }
     };
 
@@ -380,22 +400,13 @@ export default function App() {
     return () => clearInterval(liveInterval);
   }, [isLiveMode, isAdminLive, lang]);
 
-
   // ==========================================
-  // ОБЫЧНЫЙ РЕЖИМ (EXPLORER)
+  // ОБЫЧНЫЙ АУДИОГИД
   // ==========================================
   const handlePlayPause = () => {
-    if (isLiveMode && !isPlaying) {
-      if (liveAudioRef.current) liveAudioRef.current.pause();
-      setIsLiveMode(false);
-    }
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      audioRef.current.play().catch(err => console.log("Audio playback blocked", err));
-      setIsPlaying(true);
-    }
+    if (isLiveMode && !isPlaying) { if (liveAudioRef.current) liveAudioRef.current.pause(); setIsLiveMode(false); }
+    if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
+    else { audioRef.current.play().catch(() => {}); setIsPlaying(true); }
   };
 
   const handleTimeUpdate = () => {
@@ -403,60 +414,53 @@ export default function App() {
       const current = audioRef.current.currentTime;
       const total = audioRef.current.duration || 1;
       setProgress(current);
-      
       const sentences = getSentences(selectedPoi.fullText[lang]);
-      const progressRatio = current / total;
-      const index = Math.min(Math.floor(progressRatio * sentences.length), sentences.length - 1);
-      setCurrentSentenceIndex(index);
+      setCurrentSentenceIndex(Math.min(Math.floor((current / total) * sentences.length), sentences.length - 1));
     }
   };
 
-  const handleLoadedMetadata = () => {
-    if (audioRef.current) setDuration(audioRef.current.duration);
-  };
+  const handleLoadedMetadata = () => { if (audioRef.current) setDuration(audioRef.current.duration); };
 
   const handleSeek = (e) => {
-    const seekTime = Number(e.target.value);
-    if (audioRef.current) {
-      audioRef.current.currentTime = seekTime;
-      setProgress(seekTime);
-    }
+    const t2 = Number(e.target.value);
+    if (audioRef.current) { audioRef.current.currentTime = t2; setProgress(t2); }
   };
 
   const skip = (amount) => {
     if (audioRef.current) {
-      let newTime = audioRef.current.currentTime + amount;
-      newTime = Math.max(0, Math.min(newTime, duration || 0));
-      audioRef.current.currentTime = newTime;
-      setProgress(newTime);
+      audioRef.current.currentTime = Math.max(0, Math.min(audioRef.current.currentTime + amount, duration || 0));
+      setProgress(audioRef.current.currentTime);
     }
   };
 
   const handleNextTrack = () => {
-    const currentIndex = poiData.findIndex(poi => poi.id === selectedPoi.id);
-    if (currentIndex !== -1 && currentIndex < poiData.length - 1) {
-      setSelectedPoi(poiData[currentIndex + 1]);
-      setIsPlaying(true);
-    } else {
-      setIsPlaying(false);
-    }
+    const idx = poiData.findIndex(p => p.id === selectedPoi.id);
+    if (idx !== -1 && idx < poiData.length - 1) { setSelectedPoi(poiData[idx + 1]); setIsPlaying(true); }
+    else setIsPlaying(false);
   };
 
   useEffect(() => {
-    setProgress(0);
-    setCurrentSentenceIndex(-1);
+    setProgress(0); setCurrentSentenceIndex(-1);
     if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.load();
-      if (isPlaying) {
-        audioRef.current.play().catch(() => setIsPlaying(false));
-      }
+      audioRef.current.pause(); audioRef.current.load();
+      if (isPlaying) audioRef.current.play().catch(() => setIsPlaying(false));
     }
   }, [selectedPoi, lang]);
 
+  const getAudioSrc = (poi) => {
+    if (!poi) return '';
+    const langMap = { ru: 'rus', en: 'eng', uz: 'uzb' };
+    return `/Audio/${langMap[lang] || 'rus'}${poiData.findIndex(p => p.id === poi.id) + 1}.mp3`;
+  };
+
+  const getSentences = (text) => text ? text.split(/(?<=[.!?])\s+/).filter(Boolean) : [];
+  const formatTime = (time) => {
+    if (isNaN(time)) return '00:00';
+    return `${Math.floor(time / 60).toString().padStart(2, '0')}:${Math.floor(time % 60).toString().padStart(2, '0')}`;
+  };
 
   // ==========================================
-  // СТИЛИ И ТЕМЫ
+  // СТИЛИ
   // ==========================================
   const theme = {
     bg: highContrast ? 'bg-black' : 'bg-[#FAFAF9]',
@@ -484,23 +488,17 @@ export default function App() {
     svgCompass: 'text-[calc(9px*var(--font-scale))]',
   };
 
-  const getRegionClass = (id) => {
-    if (selectedPoi.id === id) return highContrast ? 'fill-yellow-400/40 stroke-yellow-400 stroke-2' : 'fill-[#38bdf8]/30 stroke-[#38bdf8] stroke-2';
-    return highContrast ? 'fill-transparent stroke-yellow-400/40 hover:fill-yellow-400/10' : 'fill-transparent stroke-[#475569]/60 hover:fill-[#38bdf8]/10';
-  };
+  const getRegionClass = (id) => selectedPoi.id === id
+    ? (highContrast ? 'fill-yellow-400/40 stroke-yellow-400 stroke-2' : 'fill-[#38bdf8]/30 stroke-[#38bdf8] stroke-2')
+    : (highContrast ? 'fill-transparent stroke-yellow-400/40 hover:fill-yellow-400/10' : 'fill-transparent stroke-[#475569]/60 hover:fill-[#38bdf8]/10');
 
-  const getLabelClass = (id) => {
-    if (selectedPoi.id === id) return highContrast ? 'fill-yellow-400 font-bold' : 'fill-[#38bdf8] font-bold';
-    return highContrast ? 'fill-yellow-400/60 group-hover:fill-yellow-400' : 'fill-[#64748b] group-hover:fill-white';
-  };
-
+  const getLabelClass = (id) => selectedPoi.id === id
+    ? (highContrast ? 'fill-yellow-400 font-bold' : 'fill-[#38bdf8] font-bold')
+    : (highContrast ? 'fill-yellow-400/60 group-hover:fill-yellow-400' : 'fill-[#64748b] group-hover:fill-white');
 
   return (
-    <div 
-      className={`min-h-screen flex flex-col transition-colors duration-300 font-sans antialiased ${theme.bg} pb-24`}
-      style={{ '--font-scale': fontScale }}
-    >
-      
+    <div className={`min-h-screen flex flex-col transition-colors duration-300 font-sans antialiased ${theme.bg} pb-24`} style={{ '--font-scale': fontScale }}>
+
       {/* HEADER */}
       <header className={`sticky top-0 z-40 backdrop-blur-md border-b transition-colors ${highContrast ? 'bg-black border-yellow-400' : 'bg-white/90 border-stone-200'}`}>
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-4">
@@ -508,16 +506,11 @@ export default function App() {
             <button onClick={() => setHighContrast(!highContrast)} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all ${tSize.xs} ${highContrast ? 'bg-yellow-400 text-black border-yellow-400' : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-700'}`}>
               👁️ {t.highContrast}
             </button>
-            
             <div className="relative inline-block">
-              <button 
-                onClick={() => setShowFontSlider(!showFontSlider)} 
-                className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex gap-2 items-center ${tSize.xs} ${fontScale > 1 ? 'bg-yellow-400 text-black border-yellow-400' : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-700'}`}
-              >
+              <button onClick={() => setShowFontSlider(!showFontSlider)} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex gap-2 items-center ${tSize.xs} ${fontScale > 1 ? 'bg-yellow-400 text-black border-yellow-400' : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-700'}`}>
                 <span>A+ {t.largeText}</span>
                 {fontScale > 1 && <span className="opacity-80">({Math.round(fontScale * 100)}%)</span>}
               </button>
-              
               {showFontSlider && (
                 <div className={`absolute top-full left-0 mt-2 p-4 rounded-xl border shadow-xl z-50 flex flex-col gap-3 min-w-[200px] ${theme.panel}`}>
                   <div className={`flex justify-between items-end w-full text-xs font-bold ${theme.textMain}`}>
@@ -525,37 +518,15 @@ export default function App() {
                     <span className="opacity-70">{Math.round(fontScale * 100)}%</span>
                     <span className="text-xl leading-none">A</span>
                   </div>
-                  <input 
-                    type="range" 
-                    min="1" max="2" step="0.02" 
-                    value={fontScale} 
-                    onChange={(e) => setFontScale(Number(e.target.value))} 
-                    className={`w-full h-2 rounded-lg appearance-none cursor-pointer transition-all ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`}
-                  />
+                  <input type="range" min="1" max="2" step="0.02" value={fontScale} onChange={(e) => setFontScale(Number(e.target.value))} className={`w-full h-2 rounded-lg appearance-none cursor-pointer ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
                 </div>
               )}
             </div>
-
-            {/* ИКОНКА ПУБЛИЧНОГО СЕАНСА */}
-            <button
-              onClick={() => {
-                setIsLiveMode(true);
-                if (isPlaying) {
-                  audioRef.current.pause();
-                  setIsPlaying(false);
-                }
-              }}
-              className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex items-center gap-2 shadow-sm ${tSize.xs} ${
-                isLiveActive || isLiveMode
-                  ? 'bg-red-600 text-white border-red-600 animate-pulse'
-                  : (highContrast ? 'bg-zinc-900 text-yellow-400 border-yellow-400' : 'bg-stone-100 text-stone-700 border-stone-300')
-              }`}
-            >
-              <span className={`w-2 h-2 rounded-full ${isLiveActive || isLiveMode ? 'bg-white' : 'bg-red-500'}`}></span>
-              {isLiveActive && isLiveMode ? t.liveBtnActive : `${t.liveBtnWait}${liveCountdown}`}
+            <button onClick={() => { setIsLiveMode(true); if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); } }} className={`px-4 py-2 rounded-full font-bold uppercase tracking-wider border transition-all flex items-center gap-2 shadow-sm ${tSize.xs} ${livePoi || isLiveMode ? 'bg-red-600 text-white border-red-600 animate-pulse' : (highContrast ? 'bg-zinc-900 text-yellow-400 border-yellow-400' : 'bg-stone-100 text-stone-700 border-stone-300')}`}>
+              <span className={`w-2 h-2 rounded-full ${livePoi || isLiveMode ? 'bg-white' : 'bg-red-500'}`}></span>
+              {livePoi && isLiveMode ? t.liveBtnActive : `${t.liveBtnWait}${liveCountdown}`}
             </button>
           </div>
-
           <div className={`flex gap-1 p-1 rounded-xl border ${highContrast ? 'bg-zinc-900 border-yellow-400' : 'bg-stone-100 border-stone-200'}`}>
             {['ru', 'en', 'uz'].map((lng) => (
               <button key={lng} onClick={() => setLang(lng)} className={`px-3 py-1 rounded-lg font-bold uppercase transition-all ${tSize.xs} ${lang === lng ? (highContrast ? 'bg-yellow-400 text-black' : 'bg-white shadow text-[#1C3D5A]') : (highContrast ? 'text-yellow-400/60 hover:text-yellow-400' : 'text-stone-500 hover:text-stone-800')}`}>
@@ -568,63 +539,47 @@ export default function App() {
 
       {/* HERO */}
       <section className="relative overflow-hidden py-10 px-4 max-w-7xl mx-auto text-center">
-        <h1 className={`font-serif font-light tracking-tight mb-4 ${tSize['4xl']} ${theme.textMain}`}>
-          {t.title}
-        </h1>
-        <p className={`max-w-2xl mx-auto font-light ${tSize.base} ${theme.textUltraMuted}`}>
-          {t.subtitle}
-        </p>
+        <h1 className={`font-serif font-light tracking-tight mb-4 ${tSize['4xl']} ${theme.textMain}`}>{t.title}</h1>
+        <p className={`max-w-2xl mx-auto font-light ${tSize.base} ${theme.textUltraMuted}`}>{t.subtitle}</p>
       </section>
 
-      {/* EXPLORER (Обычный режим с интерактивной картой) */}
+      {/* EXPLORER */}
       <section className="flex-grow max-w-7xl w-full mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative">
         <div className={`p-6 md:p-8 rounded-3xl border w-full ${theme.panel}`}>
           <div className="mb-6">
             <h2 className={`font-serif font-bold tracking-tight mb-1 ${tSize.xl} ${theme.textMain}`}>{t.mapTitle}</h2>
             <p className={`${tSize.sm} ${theme.textUltraMuted}`}>{t.mapSub}</p>
           </div>
-
           <div className={`relative w-full aspect-[4/3.5] rounded-2xl overflow-hidden flex items-center justify-center p-4 shadow-inner ${highContrast ? 'bg-black border border-yellow-400' : 'bg-[#111827]'}`}>
             <svg viewBox="0 0 400 350" className="w-full h-full max-w-lg">
               <defs>
-                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                  <path d="M 20 0 L 0 0 0 20" fill="none" stroke={highContrast ? '#222222' : '#1f2937'} strokeWidth="1"/>
-                </pattern>
-                <pattern id="diagonalHatch" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
-                  <line x1="0" y1="0" x2="0" y2="8" stroke={highContrast ? '#444444' : '#374151'} strokeWidth="2" />
-                </pattern>
+                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke={highContrast ? '#222222' : '#1f2937'} strokeWidth="1"/></pattern>
+                <pattern id="diagonalHatch" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke={highContrast ? '#444444' : '#374151'} strokeWidth="2" /></pattern>
               </defs>
               <rect width="100%" height="100%" fill="url(#grid)" />
               <rect x="40" y="45" width="320" height="210" fill="url(#diagonalHatch)" stroke={highContrast ? '#facc15' : '#475569'} strokeWidth="2" />
               <rect x="55" y="60" width="290" height="180" fill={highContrast ? '#000000' : '#1e293b'} />
-
-              <g className="cursor-pointer group" onClick={() => { setSelectedPoi(poiData[3]); }}>
+              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[3])}>
                 <rect x="40" y="45" width="80" height="210" className={`transition-all duration-300 ${getRegionClass('west_side')}`} />
                 <text x="80" y="150" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('west_side')}`}>{t.mapLabels.west}</text>
               </g>
-              
-              <g className="cursor-pointer group" onClick={() => { setSelectedPoi(poiData[2]); }}>
+              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[2])}>
                 <rect x="140" y="90" width="120" height="120" className={`transition-all duration-300 ${getRegionClass('courtyard')}`} />
                 <text x="200" y="154" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('courtyard')}`}>{t.mapLabels.court}</text>
               </g>
-              
-              <g className="cursor-pointer group" onClick={() => { setSelectedPoi(poiData[1]); }}>
+              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[1])}>
                 <rect x="300" y="80" width="60" height="140" className={`transition-all duration-300 ${getRegionClass('portal')}`} />
                 <text x="330" y="150" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('portal')}`}>{t.mapLabels.portal}</text>
               </g>
-
-              <g className="cursor-pointer group" onClick={() => { setSelectedPoi(poiData[4]); }}>
+              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[4])}>
                 <circle cx="40" cy="45" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
                 <circle cx="40" cy="255" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
                 <circle cx="360" cy="45" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
                 <circle cx="360" cy="255" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
-                <text x="360" y="20" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('minarets')}`}>
-                  {t.mapLabels.minarets}
-                </text>
+                <text x="360" y="20" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('minarets')}`}>{t.mapLabels.minarets}</text>
               </g>
-
               <g transform="translate(200, 315)">
-                <circle cx="0" cy="0" r="22" fill="none" stroke={highContrast ? 'rgba(250, 204, 21, 0.4)' : '#475569'} strokeWidth="1" strokeDasharray="2 2" />
+                <circle cx="0" cy="0" r="22" fill="none" stroke={highContrast ? 'rgba(250,204,21,0.4)' : '#475569'} strokeWidth="1" strokeDasharray="2 2" />
                 <polygon points="0,-4 15,0 0,4" fill={highContrast ? '#facc15' : '#f59e0b'} />
                 <polygon points="0,-4 -15,0 0,4" fill={highContrast ? '#444444' : '#475569'} />
                 <polygon points="-4,0 0,-15 4,0" fill={highContrast ? '#444444' : '#475569'} />
@@ -641,46 +596,24 @@ export default function App() {
         <div className="w-full flex flex-col gap-6">
           <div className={`p-8 rounded-3xl border flex flex-col justify-between shadow-lg transition-opacity ${theme.panel}`}>
             <div>
-              <span className={`tracking-widest font-bold mb-3 block ${tSize.sm} ${highContrast ? 'text-yellow-400' : 'text-amber-700'}`}>
-                📍 {t.audioTitle} (Свободный режим)
-              </span>
-              <h3 className={`font-serif font-bold mb-4 ${tSize['2xl']} ${theme.textMain}`}>
-                {selectedPoi.title[lang]}
-              </h3>
-              <p className={`font-medium mb-6 text-justify ${tSize.base} ${theme.textMuted}`}>
-                {selectedPoi.fullText[lang]}
-              </p>
+              <span className={`tracking-widest font-bold mb-3 block ${tSize.sm} ${highContrast ? 'text-yellow-400' : 'text-amber-700'}`}>📍 {t.audioTitle} (Свободный режим)</span>
+              <h3 className={`font-serif font-bold mb-4 ${tSize['2xl']} ${theme.textMain}`}>{selectedPoi.title[lang]}</h3>
+              <p className={`font-medium mb-6 text-justify ${tSize.base} ${theme.textMuted}`}>{selectedPoi.fullText[lang]}</p>
             </div>
-
             <div className={`pt-6 border-t flex flex-col gap-4 ${theme.border}`}>
-              <audio 
-                ref={audioRef} 
-                src={getAudioSrc(selectedPoi)}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                onEnded={handleNextTrack}
-              />
-              <button
-                onClick={handlePlayPause}
-                className={`flex items-center justify-center gap-3 px-6 py-4 rounded-2xl w-full font-bold transition-all shadow-md ${tSize.lg} ${highContrast ? 'bg-yellow-400 text-black hover:bg-yellow-500' : 'bg-[#1C3D5A] text-white hover:bg-[#122B42]'}`}
-              >
-                {isPlaying ? (
-                  <><span className={`w-3 h-3 rounded-full animate-ping ${highContrast ? 'bg-black' : 'bg-green-400'}`} />{t.playing}</>
-                ) : (
-                  <>▶ {t.listen}</>
-                )}
+              <audio ref={audioRef} src={getAudioSrc(selectedPoi)} onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleLoadedMetadata} onEnded={handleNextTrack} />
+              <button onClick={handlePlayPause} className={`flex items-center justify-center gap-3 px-6 py-4 rounded-2xl w-full font-bold transition-all shadow-md ${tSize.lg} ${highContrast ? 'bg-yellow-400 text-black hover:bg-yellow-500' : 'bg-[#1C3D5A] text-white hover:bg-[#122B42]'}`}>
+                {isPlaying ? (<><span className={`w-3 h-3 rounded-full animate-ping ${highContrast ? 'bg-black' : 'bg-green-400'}`} />{t.playing}</>) : (<>▶ {t.listen}</>)}
               </button>
-
               <div className="flex items-center gap-3 bg-stone-100/50 p-2 rounded-xl border border-stone-200">
-                <button onClick={() => skip(-5)} className={`p-2 rounded-full font-bold transition-colors ${highContrast ? 'hover:bg-yellow-400 text-yellow-500 hover:text-black' : 'hover:bg-stone-200 text-stone-600'}`} title="Назад на 5 секунд">-5s</button>
+                <button onClick={() => skip(-5)} className={`p-2 rounded-full font-bold transition-colors ${highContrast ? 'hover:bg-yellow-400 text-yellow-500 hover:text-black' : 'hover:bg-stone-200 text-stone-600'}`}>-5s</button>
                 <span className={`text-xs font-mono w-12 text-right ${theme.textUltraMuted}`}>{formatTime(progress)}</span>
                 <input type="range" min="0" max={duration || 100} value={progress} onChange={handleSeek} className={`w-full h-2 rounded-lg appearance-none cursor-pointer ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
                 <span className={`text-xs font-mono w-12 text-left ${theme.textUltraMuted}`}>{formatTime(duration)}</span>
-                <button onClick={() => skip(5)} className={`p-2 rounded-full font-bold transition-colors ${highContrast ? 'hover:bg-yellow-400 text-yellow-500 hover:text-black' : 'hover:bg-stone-200 text-stone-600'}`} title="Вперед на 5 секунд">+5s</button>
+                <button onClick={() => skip(5)} className={`p-2 rounded-full font-bold transition-colors ${highContrast ? 'hover:bg-yellow-400 text-yellow-500 hover:text-black' : 'hover:bg-stone-200 text-stone-600'}`}>+5s</button>
               </div>
             </div>
           </div>
-
           <div className={`p-4 rounded-2xl border ${theme.listBg}`}>
             <nav className="flex flex-col gap-2">
               {poiData.map((poi) => (
@@ -694,26 +627,20 @@ export default function App() {
         </div>
       </section>
 
+      {/* ПОЛНЫЙ ТЕКСТ */}
       <section className={`w-full px-4 py-16 mt-12 border-t ${highContrast ? 'bg-[#09090b] border-yellow-400' : 'bg-stone-50 border-stone-200'}`}>
         <div className="max-w-5xl mx-auto">
-          <h4 className={`font-mono uppercase tracking-widest mb-10 font-bold flex items-center gap-3 ${tSize.xl} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>
-            📖 {t.fullTextTitle}
-          </h4>
-          
+          <h4 className={`font-mono uppercase tracking-widest mb-10 font-bold flex items-center gap-3 ${tSize.xl} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>📖 {t.fullTextTitle}</h4>
           <div className="w-full">
             {poiData.map((poi) => {
-              const isActiveParagraph = selectedPoi.id === poi.id;
-              const sentences = getSentences(poi.fullText[lang]);
+              const isActive = selectedPoi.id === poi.id;
               return (
                 <p key={poi.id} className={`mb-8 text-justify transition-all duration-300 font-medium ${tSize.lg} ${theme.textMain}`}>
-                  {sentences.map((sentence, index) => {
-                    const isKaraokeActive = isActiveParagraph && isPlaying && index === currentSentenceIndex;
-                    return (
-                      <span key={index} className={`transition-all duration-300 ${isKaraokeActive ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm` : ''}`}>
-                        {sentence}{' '}
-                      </span>
-                    );
-                  })}
+                  {getSentences(poi.fullText[lang]).map((sentence, index) => (
+                    <span key={index} className={`transition-all duration-300 ${isActive && isPlaying && index === currentSentenceIndex ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm` : ''}`}>
+                      {sentence}{' '}
+                    </span>
+                  ))}
                 </p>
               );
             })}
@@ -721,194 +648,95 @@ export default function App() {
         </div>
       </section>
 
-      {/* ==========================================
-          ПЛАВАЮЩИЙ ВИДЖЕТ СЕАНСА (НОВЫЙ ЕДИНЫЙ РЕЖИМ)
-          ========================================== */}
+      {/* ВИДЖЕТ СЕАНСА */}
       {isLiveMode && (
-        <div 
-          style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }}
-          className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] h-[380px] min-w-[280px] min-h-[250px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col gap-4 shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}
-        >
-          {/* Шапка окна */}
-          <div 
-            onPointerDown={handleDragStart}
-            className={`flex justify-between items-center border-b pb-3 cursor-move select-none touch-none ${theme.border}`}
-          >
+        <div style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }} className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] h-[380px] min-w-[280px] min-h-[250px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col gap-4 shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
+          <div onPointerDown={handleDragStart} className={`flex justify-between items-center border-b pb-3 cursor-move select-none touch-none ${theme.border}`}>
             <h3 className={`font-serif font-bold flex items-center gap-3 ${tSize.lg} ${theme.textMain}`}>
-              <span className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
+              <span className={`w-3 h-3 rounded-full ${livePoi ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
               {isAdminLive ? '⚡ Админ-сеанс' : t.liveModalTitle}
             </h3>
-            
             <div className="flex items-center gap-3" onPointerDown={(e) => e.stopPropagation()}>
-              {!isAdminLive && (
-                <button onClick={handleAdminForceStart} className={`text-xl opacity-50 hover:opacity-100 transition-opacity ${theme.textMain}`} title="Панель Администратора">
-                  ⚙️
-                </button>
-              )}
-              <button onClick={() => { setIsLiveMode(false); setIsAdminLive(false); if (liveAudioRef.current) liveAudioRef.current.pause(); }} className={`text-2xl font-bold transition-opacity hover:opacity-50 ${theme.textMain}`}>
-                ✕
-              </button>
+              {!isAdminLive && <button onClick={handleAdminForceStart} className={`text-xl opacity-50 hover:opacity-100 transition-opacity ${theme.textMain}`} title="Панель Администратора">⚙️</button>}
+              <button onClick={() => { setIsLiveMode(false); setIsAdminLive(false); if (liveAudioRef.current) liveAudioRef.current.pause(); }} className={`text-2xl font-bold transition-opacity hover:opacity-50 ${theme.textMain}`}>✕</button>
             </div>
           </div>
-
-          {isLiveActive ? (
+          {livePoi ? (
             <div className="flex flex-col gap-3 flex-1 overflow-hidden">
-              <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>
-                {t.title}
-              </h4>
-              
-              {/* Окно с полным текстом для караоке */}
-              <div ref={liveTextContainerRef} className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3 relative">
+              <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>{livePoi.title[lang]}</h4>
+              <div className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3">
                 <p className={`text-justify font-medium ${tSize.sm} ${theme.textMain}`}>
-                  {getLiveSentences(lang).map((sentence, index) => {
-                    const isKaraokeActive = index === liveSentenceIndex;
-                    return (
-                      <span 
-                        key={index} 
-                        ref={isKaraokeActive ? activeSentenceRef : null}
-                        className={`transition-all duration-300 ${isKaraokeActive ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}
-                      >
-                        {sentence}{' '}
-                      </span>
-                    );
-                  })}
+                  {getSentences(livePoi.fullText[lang]).map((sentence, index) => (
+                    <span key={index} className={`transition-all duration-300 ${index === liveSentenceIndex ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}>
+                      {sentence}{' '}
+                    </span>
+                  ))}
                 </p>
               </div>
-
-              {/* Таймлайн сеанса (241 секунда) */}
               <div className={`mt-auto flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
                 <span className={`text-xs font-mono w-10 text-right ${theme.textUltraMuted}`}>{formatTime(liveProgress)}</span>
-                <input type="range" min="0" max={LIVE_DURATION} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
-                <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(LIVE_DURATION)}</span>
+                <input type="range" min="0" max={liveDuration || 100} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
+                <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(liveDuration)}</span>
               </div>
-              
-              {/* Единый источник звука, который переключается при смене языка */}
-              <audio ref={liveAudioRef} src={`/Audio/live_${lang}.mp3`} preload="auto" />
+              <audio ref={liveAudioRef} src={getAudioSrc(livePoi)} preload="auto" />
             </div>
           ) : (
-            <div className="text-center py-6 flex flex-col items-center justify-center flex-1 gap-4 relative">
-              <p className={`${tSize.base} ${theme.textMuted} font-light`}>
-                {t.liveModalWait}
-              </p>
-              <div className={`font-mono font-bold tracking-widest ${tSize['4xl']} ${highContrast ? 'text-yellow-400' : 'text-[#1C3D5A]'}`}>
-                {liveCountdown}
-              </div>
+            <div className="text-center py-6 flex flex-col items-center justify-center flex-1 gap-4">
+              <p className={`${tSize.base} ${theme.textMuted} font-light`}>{t.liveModalWait}</p>
+              <div className={`font-mono font-bold tracking-widest ${tSize['4xl']} ${highContrast ? 'text-yellow-400' : 'text-[#1C3D5A]'}`}>{liveCountdown}</div>
             </div>
           )}
         </div>
       )}
 
-      {/* ==========================================
-          ВИДЖЕТ ИИ-ЧАТА
-          ========================================== */}
-      <button 
-        onClick={() => setIsChatOpen(!isChatOpen)}
-        className={`fixed bottom-4 left-4 md:bottom-8 md:left-8 z-50 w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all transform hover:scale-105 ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-[#1C3D5A] text-white'} ${isChatOpen ? 'rotate-12' : ''}`}
-        title="Спросить ИИ-Гида"
-      >
+      {/* КНОПКА ЧАТА */}
+      <button onClick={() => setIsChatOpen(!isChatOpen)} className={`fixed bottom-4 left-4 md:bottom-8 md:left-8 z-50 w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all transform hover:scale-105 ${highContrast ? 'bg-yellow-400 text-black border-2 border-white' : 'bg-[#1C3D5A] text-white'} ${isChatOpen ? 'rotate-12' : ''}`} title="Спросить ИИ-Гида">
         <span className="text-3xl">🤖</span>
       </button>
 
+      {/* ВИДЖЕТ ЧАТА С ВКЛАДКАМИ */}
       {isChatOpen && (
         <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[400px] h-[500px] min-w-[280px] min-h-[300px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
- 
-          {/* ── Вкладки ── */}
-          <div className={`flex items-center gap-1 px-3 pt-3 border-b overflow-x-auto ${theme.border}`}>
+
+          {/* Вкладки */}
+          <div className={`flex items-center gap-1 px-2 pt-2 border-b overflow-x-auto ${theme.border}`}>
             {chatTabs.map(tab => (
-              <div
-                key={tab.id}
-                className={`flex items-center gap-1 px-3 py-1.5 rounded-t-xl text-xs font-bold cursor-pointer whitespace-nowrap transition-all flex-shrink-0 ${
-                  tab.id === activeTabId
-                    ? (highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white')
-                    : (highContrast ? 'bg-zinc-800 text-yellow-400 hover:bg-zinc-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200')
-                }`}
-                onClick={() => setActiveTabId(tab.id)}
-              >
+              <div key={tab.id} onClick={() => setActiveTabId(tab.id)} className={`flex items-center gap-1 px-3 py-1.5 rounded-t-lg text-xs font-bold cursor-pointer whitespace-nowrap transition-all flex-shrink-0 ${tab.id === activeTabId ? (highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white') : (highContrast ? 'bg-zinc-800 text-yellow-400 hover:bg-zinc-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200')}`}>
                 <span>{tab.name}</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteTab(tab.id); }}
-                  className="ml-1 opacity-60 hover:opacity-100 text-sm leading-none"
-                  title="Удалить вкладку"
-                >×</button>
+                <button onClick={(e) => { e.stopPropagation(); deleteTab(tab.id); }} className="ml-1 opacity-60 hover:opacity-100 text-sm leading-none hover:text-red-400" title="Удалить">×</button>
               </div>
             ))}
- 
-            <button
-              onClick={addNewTab}
-              className={`flex-shrink-0 px-2 py-1.5 rounded-t-xl text-sm font-bold transition-all ${
-                highContrast ? 'text-yellow-400 hover:bg-zinc-800' : 'text-stone-400 hover:bg-stone-100 hover:text-stone-700'
-              }`}
-              title="Новый чат"
-            >＋</button>
+            <button onClick={addNewTab} className={`flex-shrink-0 px-2 py-1.5 rounded-t-lg text-base font-bold transition-all ${highContrast ? 'text-yellow-400 hover:bg-zinc-800' : 'text-stone-400 hover:bg-stone-100 hover:text-[#1C3D5A]'}`} title={t.newChat}>＋</button>
           </div>
- 
-          {/* ── Шапка чата ── */}
-          <div className={`flex justify-between items-center px-5 py-3 border-b ${theme.border}`}>
-            <h3 className={`font-bold flex items-center gap-2 ${tSize.sm} ${theme.textMain}`}>
-              <span className="text-xl">🤖</span> {t.chatTitle}
-            </h3>
+
+          {/* Шапка */}
+          <div className={`flex justify-between items-center px-4 py-3 border-b ${theme.border}`}>
+            <h3 className={`font-bold flex items-center gap-2 ${tSize.sm} ${theme.textMain}`}><span className="text-lg">🤖</span> {t.chatTitle}</h3>
             <div className="flex items-center gap-2">
-              <button
-                onClick={clearChat}
-                className={`text-xs px-2 py-1 rounded-lg border transition-all ${
-                  highContrast
-                    ? 'border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black'
-                    : 'border-stone-300 text-stone-400 hover:border-red-400 hover:text-red-500'
-                }`}
-                title="Очистить чат"
-              >
-                🗑 Очистить
-              </button>
-              <button
-                onClick={() => setIsChatOpen(false)}
-                className={`text-xl font-bold opacity-60 hover:opacity-100 ${theme.textMain}`}
-              >✕</button>
+              <button onClick={clearChat} className={`text-xs px-2 py-1 rounded-lg border transition-all ${highContrast ? 'border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black' : 'border-stone-300 text-stone-400 hover:border-red-400 hover:text-red-500'}`}>🗑 {t.clearChat}</button>
+              <button onClick={() => setIsChatOpen(false)} className={`text-xl font-bold opacity-60 hover:opacity-100 ${theme.textMain}`}>✕</button>
             </div>
           </div>
- 
-          {/* ── Сообщения ── */}
+
+          {/* Сообщения */}
           <div className={`flex-1 overflow-y-auto p-4 flex flex-col gap-3 ${highContrast ? 'bg-black' : 'bg-stone-50'}`}>
             {chatMessages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} ${
-                  msg.sender === 'user'
-                    ? theme.chatBubbleUser + ' rounded-tr-sm'
-                    : theme.chatBubbleAi + ' rounded-tl-sm shadow-sm'
-                }`}>
-                  {msg.text}
-                </div>
+                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} ${msg.sender === 'user' ? theme.chatBubbleUser + ' rounded-tr-sm' : theme.chatBubbleAi + ' rounded-tl-sm shadow-sm'}`}>{msg.text}</div>
               </div>
             ))}
             {isAiTyping && (
               <div className="flex justify-start">
-                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} italic opacity-70 ${theme.chatBubbleAi} rounded-tl-sm`}>
-                  {t.aiTyping}
-                </div>
+                <div className={`max-w-[80%] p-3 rounded-2xl ${tSize.sm} italic opacity-70 ${theme.chatBubbleAi} rounded-tl-sm`}>{t.aiTyping}</div>
               </div>
             )}
             <div ref={chatEndRef} />
           </div>
- 
-          {/* ── Поле ввода ── */}
-          <form onSubmit={handleSendMessage} className={`p-3 border-t flex gap-2 rounded-b-3xl ${theme.panel}`}>
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder={t.chatInput}
-              className={`flex-1 px-4 py-2 rounded-xl border outline-none ${tSize.sm} transition-colors ${
-                highContrast
-                  ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600'
-                  : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'
-              }`}
-            />
-            <button
-              type="submit"
-              disabled={!chatInput.trim()}
-              className={`p-2 px-4 rounded-xl font-bold transition-all ${
-                !chatInput.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'
-              } ${highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white'}`}
-            >➤</button>
+
+          {/* Ввод */}
+          <form onSubmit={handleSendMessage} className={`p-3 border-t flex gap-2 ${theme.panel}`}>
+            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={t.chatInput} className={`flex-1 px-4 py-2 rounded-xl border outline-none ${tSize.sm} transition-colors ${highContrast ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600' : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'}`} />
+            <button type="submit" disabled={!chatInput.trim()} className={`p-2 px-4 rounded-xl font-bold transition-all ${!chatInput.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'} ${highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white'}`}>➤</button>
           </form>
         </div>
       )}
@@ -916,18 +744,10 @@ export default function App() {
       {/* FOOTER */}
       <footer className={`py-12 mt-12 text-center border-t ${theme.border}`}>
         <div className="inline-flex flex-col items-center justify-center opacity-70 hover:opacity-100 transition-opacity duration-300 cursor-default">
-          <span className={`text-[11px] tracking-[0.2em] uppercase font-bold mb-2 ${theme.textUltraMuted}`}>
-            {t.developedAt}
-          </span>
-          <span className={`text-base font-serif font-medium ${theme.textMuted}`}>
-            Turin Polytechnic University in Tashkent
-          </span>
+          <span className={`text-[11px] tracking-[0.2em] uppercase font-bold mb-2 ${theme.textUltraMuted}`}>{t.developedAt}</span>
+          <span className={`text-base font-serif font-medium ${theme.textMuted}`}>Turin Polytechnic University in Tashkent</span>
         </div>
       </footer>
-      
-      {/* VERCEL АНАЛИТИКА */}
-      <Analytics />
-      
     </div>
   );
 }
