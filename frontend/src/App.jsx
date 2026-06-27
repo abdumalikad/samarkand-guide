@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { poiData } from './data/poiData';
+import { Analytics } from '@vercel/analytics/react';
 
 // ==========================================
 // GEMINI API — ПРЯМО В БРАУЗЕРЕ (без бэкенда)
@@ -770,6 +771,7 @@ export default function App() {
           <span className={`text-base font-serif font-medium ${theme.textMuted}`}>Turin Polytechnic University in Tashkent</span>
         </div>
       </footer>
+      <Analytics />
     </div>
   );
 }
