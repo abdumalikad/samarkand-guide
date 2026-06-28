@@ -2,10 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { poiData } from './data/poiData';
 import { Analytics } from '@vercel/analytics/react';
 
-// ==========================================
-// GEMINI API — ПРЯМО В БРАУЗЕРЕ (без бэкенда)
-// API ключ берётся из переменной окружения Vite
-// ==========================================
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 const GREETINGS = [
@@ -76,9 +72,6 @@ async function askGemini(message, history, lang) {
   return data.candidates?.[0]?.content?.parts?.[0]?.text || 'Ответ не получен.';
 }
 
-// ==========================================
-// ПЕРЕВОДЫ
-// ==========================================
 const translations = {
   ru: {
     title: 'Цифровой музей Медресе Улугбека',
@@ -177,21 +170,15 @@ export default function App() {
   const [fontScale, setFontScale] = useState(1);
   const [showFontSlider, setShowFontSlider] = useState(false);
 
-  // ==========================================
-  // LIVE СЕАНС (ЕДИНЫЙ ТРЕК НА 241 СЕКУНДУ)
-  // ==========================================
-  const LIVE_DURATION = 241; // 4 мин 1 сек
-  
+  const LIVE_DURATION = 241;
+
   const [isLiveMode, setIsLiveMode] = useState(false);
   const [isAdminLive, setIsAdminLive] = useState(false);
   const [liveCountdown, setLiveCountdown] = useState('00:00');
-  
-  // Заменяем livePoi на глобальный флаг активности
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [liveSentenceIndex, setLiveSentenceIndex] = useState(-1);
   const [liveProgress, setLiveProgress] = useState(0);
 
-  // ИИ-ЧАТ С ВКЛАДКАМИ
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [isAiTyping, setIsAiTyping] = useState(false);
@@ -203,7 +190,6 @@ export default function App() {
   const activeTab = chatTabs.find(tab => tab.id === activeTabId) || chatTabs[0];
   const chatMessages = activeTab?.messages || [];
 
-  // Перемещение окна сеанса
   const [sessionPos, setSessionPos] = useState({ x: 0, y: 0 });
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
@@ -217,12 +203,8 @@ export default function App() {
   const activeSentenceRef = useRef(null);
   const t = translations[lang];
 
-  // ==========================================
-  // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-  // ==========================================
   const getSentences = (text) => text ? text.split(/(?<=[.!?])\s+/).filter(Boolean) : [];
 
-  // Функция собирает ВЕСЬ текст со всех зон в единую ленту
   const getLiveSentences = (currentLang) => {
     return poiData.flatMap(poi => getSentences(poi.fullText[currentLang]));
   };
@@ -232,7 +214,6 @@ export default function App() {
     return `${Math.floor(time / 60).toString().padStart(2, '0')}:${Math.floor(time % 60).toString().padStart(2, '0')}`;
   };
 
-  // DRAG & DROP
   const handleDragStart = (e) => {
     isDragging.current = true;
     dragStart.current = { x: e.clientX - sessionPos.x, y: e.clientY - sessionPos.y };
@@ -258,7 +239,92 @@ export default function App() {
     }
   }, [chatMessages, isChatOpen]);
 
-  // ФУНКЦИИ ВКЛАДОК
+  // ФИХ 2: Выделенное предложение всегда по центру — через getBoundingClientRect
+  useEffect(() => {
+    if (activeSentenceRef.current && liveTextContainerRef.current) {
+      const container = liveTextContainerRef.current;
+      const el = activeSentenceRef.current;
+      const containerRect = container.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const scrollOffset = elRect.top - containerRect.top - (containerRect.height / 2) + (elRect.height / 2);
+      container.scrollTop += scrollOffset;
+    }
+  }, [liveSentenceIndex]);
+
+  useEffect(() => {
+    if (liveAudioRef.current && isLiveMode && isLiveActive) {
+      const now = new Date();
+      const elapsed = isAdminLive ? adminTimeRef.current : (now.getMinutes() * 60 + now.getSeconds());
+      liveAudioRef.current.currentTime = elapsed;
+      liveAudioRef.current.play().catch(() => {});
+    }
+  }, [lang]);
+
+  useEffect(() => {
+    const syncLiveSession = () => {
+      const now = new Date();
+      const mins = now.getMinutes();
+      const secs = now.getSeconds();
+      setLiveCountdown(`${(59 - mins).toString().padStart(2, '0')}:${(59 - secs).toString().padStart(2, '0')}`);
+
+      let elapsedSeconds = isAdminLive ? adminTimeRef.current : (mins * 60 + secs);
+
+      if (elapsedSeconds <= LIVE_DURATION) {
+        setIsLiveActive(true);
+        hasSessionPlayed.current = true;
+        setLiveProgress(elapsedSeconds);
+
+        if (isLiveMode && liveAudioRef.current) {
+          const audioEl = liveAudioRef.current;
+          if (Math.abs(audioEl.currentTime - elapsedSeconds) > 1.5) {
+            audioEl.currentTime = elapsedSeconds;
+          }
+          if (audioEl.paused) {
+            audioEl.play().catch(() => {});
+          }
+          const sentences = getLiveSentences(lang);
+          const totalChars = sentences.reduce((sum, s) => sum + s.length, 0);
+          let cumulativeTime = 0;
+          let calculatedIndex = 0;
+
+          for (let i = 0; i < sentences.length; i++) {
+            const sentenceDuration = (sentences[i].length / totalChars) * LIVE_DURATION;
+            if (elapsedSeconds >= cumulativeTime) {
+              calculatedIndex = i;
+            }
+            cumulativeTime += sentenceDuration;
+            if (cumulativeTime > elapsedSeconds) break;
+          }
+
+          calculatedIndex = Math.min(calculatedIndex, sentences.length - 1);
+          setLiveSentenceIndex(calculatedIndex);
+        }
+        if (isAdminLive) adminTimeRef.current += 1;
+      } else {
+        setIsLiveActive(false);
+        setLiveProgress(0);
+        setLiveSentenceIndex(-1);
+
+        if (liveAudioRef.current && !liveAudioRef.current.paused) liveAudioRef.current.pause();
+
+        if (hasSessionPlayed.current) {
+          setChatTabs(prev => prev.map(tab =>
+            tab.id === activeTabId
+              ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] }
+              : tab
+          ));
+          setIsChatOpen(true);
+          hasSessionPlayed.current = false;
+        }
+        if (isAdminLive) { setIsAdminLive(false); setIsLiveMode(false); }
+      }
+    };
+
+    syncLiveSession();
+    const liveInterval = setInterval(syncLiveSession, 1000);
+    return () => clearInterval(liveInterval);
+  }, [isLiveMode, isAdminLive, lang]);
+
   const addNewTab = () => {
     const newId = Date.now();
     setChatTabs(prev => [
@@ -286,7 +352,6 @@ export default function App() {
     ));
   };
 
-  // ОТПРАВКА СООБЩЕНИЯ
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -316,7 +381,6 @@ export default function App() {
     }
   };
 
-  // АДМИН
   const handleAdminForceStart = () => {
     const now = new Date();
     const remainingMins = 59 - now.getMinutes();
@@ -331,95 +395,6 @@ export default function App() {
     }
   };
 
-  // ==========================================
-  // СИНХРОНИЗАЦИЯ ЕДИНОГО СЕАНСА
-  // ==========================================
-  
-  // Автоскролл текста караоке
-  useEffect(() => {
-    if (activeSentenceRef.current && liveTextContainerRef.current) {
-      const container = liveTextContainerRef.current;
-      const el = activeSentenceRef.current;
-      container.scrollTo({
-        top: el.offsetTop - container.offsetTop - (container.clientHeight / 2) + (el.clientHeight / 2),
-        behavior: 'smooth'
-      });
-    }
-  }, [liveSentenceIndex]);
-
-  // Мгновенная синхронизация времени при смене языка на ходу
-  useEffect(() => {
-    if (liveAudioRef.current && isLiveMode && isLiveActive) {
-      const now = new Date();
-      const elapsed = isAdminLive ? adminTimeRef.current : (now.getMinutes() * 60 + now.getSeconds());
-      liveAudioRef.current.currentTime = elapsed;
-      liveAudioRef.current.play().catch(() => {});
-    }
-  }, [lang]);
-
-  // Таймер единого сеанса
-  useEffect(() => {
-    const syncLiveSession = () => {
-      const now = new Date();
-      const mins = now.getMinutes();
-      const secs = now.getSeconds();
-      setLiveCountdown(`${(59 - mins).toString().padStart(2, '0')}:${(59 - secs).toString().padStart(2, '0')}`);
-
-      let elapsedSeconds = isAdminLive ? adminTimeRef.current : (mins * 60 + secs);
-
-      // Проверка: сеанс идет ровно 241 секунду
-      if (elapsedSeconds <= LIVE_DURATION) {
-        setIsLiveActive(true);
-        hasSessionPlayed.current = true;
-        setLiveProgress(elapsedSeconds);
-
-        if (isLiveMode && liveAudioRef.current) {
-          const audioEl = liveAudioRef.current;
-          
-          // Жесткая синхронизация времени
-          if (Math.abs(audioEl.currentTime - elapsedSeconds) > 1.5) {
-            audioEl.currentTime = elapsedSeconds;
-          }
-          if (audioEl.paused) {
-            audioEl.play().catch(() => {});
-          }
-
-          // Высчитываем индекс текущего предложения на основе общего прогресса
-          const sentences = getLiveSentences(lang);
-          const progressRatio = elapsedSeconds / LIVE_DURATION;
-          const calculatedIndex = Math.min(Math.floor(progressRatio * sentences.length), sentences.length - 1);
-          setLiveSentenceIndex(calculatedIndex);
-        }
-        if (isAdminLive) adminTimeRef.current += 1;
-      } else {
-        // Сеанс завершен
-        setIsLiveActive(false);
-        setLiveProgress(0);
-        setLiveSentenceIndex(-1);
-        
-        if (liveAudioRef.current && !liveAudioRef.current.paused) liveAudioRef.current.pause();
-        
-        if (hasSessionPlayed.current) {
-          setChatTabs(prev => prev.map(tab =>
-            tab.id === activeTabId
-              ? { ...tab, messages: [...tab.messages, { sender: 'ai', text: t.chatWelcomeAfter }] }
-              : tab
-          ));
-          setIsChatOpen(true);
-          hasSessionPlayed.current = false;
-        }
-        if (isAdminLive) { setIsAdminLive(false); setIsLiveMode(false); }
-      }
-    };
-
-    syncLiveSession();
-    const liveInterval = setInterval(syncLiveSession, 1000);
-    return () => clearInterval(liveInterval);
-  }, [isLiveMode, isAdminLive, lang]);
-
-  // ==========================================
-  // ОБЫЧНЫЙ АУДИОГИД
-  // ==========================================
   const handlePlayPause = () => {
     if (isLiveMode && !isPlaying) { if (liveAudioRef.current) liveAudioRef.current.pause(); setIsLiveMode(false); }
     if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
@@ -431,8 +406,22 @@ export default function App() {
       const current = audioRef.current.currentTime;
       const total = audioRef.current.duration || 1;
       setProgress(current);
+
       const sentences = getSentences(selectedPoi.fullText[lang]);
-      setCurrentSentenceIndex(Math.min(Math.floor((current / total) * sentences.length), sentences.length - 1));
+      const totalChars = sentences.reduce((sum, s) => sum + s.length, 0);
+      let cumulativeTime = 0;
+      let calculatedIndex = 0;
+
+      for (let i = 0; i < sentences.length; i++) {
+        const sentenceDuration = (sentences[i].length / totalChars) * total;
+        if (current >= cumulativeTime) {
+          calculatedIndex = i;
+        }
+        cumulativeTime += sentenceDuration;
+        if (cumulativeTime > current) break;
+      }
+
+      setCurrentSentenceIndex(Math.min(calculatedIndex, sentences.length - 1));
     }
   };
 
@@ -467,15 +456,11 @@ export default function App() {
     return `/Audio/${langMap[lang] || 'rus'}${poiData.findIndex(p => p.id === poi.id) + 1}.mp3`;
   };
 
-  // Возвращает единый трек для режима сеанса
   const getLiveAudioSrc = () => {
     const langMap = { ru: 'ru', en: 'en', uz: 'uz' };
     return `/Audio/live_${langMap[lang] || 'ru'}.mp3`;
   };
 
-  // ==========================================
-  // СТИЛИ
-  // ==========================================
   const theme = {
     bg: highContrast ? 'bg-black' : 'bg-[#FAFAF9]',
     panel: highContrast ? 'bg-zinc-900 border-yellow-400' : 'bg-white border-stone-200 shadow-sm',
@@ -505,7 +490,7 @@ export default function App() {
   const getRegionClass = (id) => selectedPoi.id === id
     ? (highContrast ? 'fill-yellow-400/40 stroke-yellow-400 stroke-2' : 'fill-[#38bdf8]/30 stroke-[#38bdf8] stroke-2')
     : (highContrast ? 'fill-transparent stroke-yellow-400/40 hover:fill-yellow-400/10' : 'fill-transparent stroke-[#475569]/60 hover:fill-[#38bdf8]/10');
-    
+
   const getLabelClass = (id) => selectedPoi.id === id
     ? (highContrast ? 'fill-yellow-400 font-bold' : 'fill-[#38bdf8] font-bold')
     : (highContrast ? 'fill-yellow-400/60 group-hover:fill-yellow-400' : 'fill-[#64748b] group-hover:fill-white');
@@ -557,7 +542,7 @@ export default function App() {
         <p className={`max-w-2xl mx-auto font-light ${tSize.base} ${theme.textUltraMuted}`}>{t.subtitle}</p>
       </section>
 
-      {/* EXPLORER (Свободный режим) */}
+      {/* EXPLORER */}
       <section className="flex-grow max-w-7xl w-full mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative">
         <div className={`p-6 md:p-8 rounded-3xl border w-full ${theme.panel}`}>
           <div className="mb-6">
@@ -662,32 +647,46 @@ export default function App() {
         </div>
       </section>
 
-      {/* ВИДЖЕТ ЕДИНОГО СЕАНСА */}
+      {/* ФИХ 1: ВИДЖЕТ СЕАНСА — увеличен размер, исправлен layout */}
       {isLiveMode && (
-        <div style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }} className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[450px] h-[380px] min-w-[280px] min-h-[250px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col gap-4 shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
-          <div onPointerDown={handleDragStart} className={`flex justify-between items-center border-b pb-3 cursor-move select-none touch-none ${theme.border}`}>
+        <div
+          style={{ transform: `translate(${sessionPos.x}px, ${sessionPos.y}px)` }}
+          className={`fixed bottom-4 right-4 md:bottom-8 md:right-8 z-[100] w-[95%] md:w-[480px] h-[520px] min-w-[300px] min-h-[320px] max-w-[95vw] max-h-[90vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl border ${theme.panel}`}
+        >
+          {/* Шапка — drag handle */}
+          <div
+            onPointerDown={handleDragStart}
+            className={`flex-shrink-0 flex justify-between items-center px-4 py-3 border-b cursor-move select-none touch-none ${theme.border}`}
+          >
             <h3 className={`font-serif font-bold flex items-center gap-3 ${tSize.lg} ${theme.textMain}`}>
-              <span className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
+              <span className={`w-3 h-3 rounded-full flex-shrink-0 ${isLiveActive ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`}></span>
               {isAdminLive ? '⚡ Админ-сеанс' : t.liveModalTitle}
             </h3>
-            <div className="flex items-center gap-3" onPointerDown={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 flex-shrink-0" onPointerDown={(e) => e.stopPropagation()}>
               {!isAdminLive && <button onClick={handleAdminForceStart} className={`text-xl opacity-50 hover:opacity-100 transition-opacity ${theme.textMain}`} title="Панель Администратора">⚙️</button>}
               <button onClick={() => { setIsLiveMode(false); setIsAdminLive(false); if (liveAudioRef.current) liveAudioRef.current.pause(); }} className={`text-2xl font-bold transition-opacity hover:opacity-50 ${theme.textMain}`}>✕</button>
             </div>
           </div>
+
           {isLiveActive ? (
-            <div className="flex flex-col gap-3 flex-1 overflow-hidden">
-              <h4 className={`font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>{t.title}</h4>
-              
-              <div ref={liveTextContainerRef} className="flex-1 overflow-y-auto pr-2 rounded-lg bg-black/5 p-3 relative">
+            <div className="flex flex-col flex-1 overflow-hidden px-4 py-3 gap-3">
+              <h4 className={`flex-shrink-0 font-bold ${tSize.base} ${highContrast ? 'text-yellow-400' : 'text-amber-800'}`}>{t.title}</h4>
+
+              {/* ФИХ 2 и 3: overflow-hidden убирает ручной скролл, JS-скролл через scrollTop работает */}
+              <div
+                ref={liveTextContainerRef}
+                className={`flex-1 overflow-hidden rounded-lg p-3 ${highContrast ? 'bg-zinc-800' : 'bg-black/5'}`}
+              >
                 <p className={`text-justify font-medium ${tSize.sm} ${theme.textMain}`}>
                   {getLiveSentences(lang).map((sentence, index) => {
                     const isKaraokeActive = index === liveSentenceIndex;
                     return (
-                      <span 
-                        key={index} 
+                      <span
+                        key={index}
                         ref={isKaraokeActive ? activeSentenceRef : null}
-                        className={`transition-all duration-300 ${isKaraokeActive ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold` : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}
+                        className={`transition-all duration-300 ${isKaraokeActive
+                          ? `${theme.karaokeActiveBg} ${theme.karaokeActiveText} px-1 rounded shadow-sm font-semibold`
+                          : (liveSentenceIndex === -1 ? 'opacity-90' : 'opacity-40')}`}
                       >
                         {sentence}{' '}
                       </span>
@@ -695,12 +694,14 @@ export default function App() {
                   })}
                 </p>
               </div>
-              
-              <div className={`mt-auto flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
+
+              {/* Прогресс бар */}
+              <div className={`flex-shrink-0 flex items-center gap-3 p-2 rounded-xl border ${theme.listBg}`}>
                 <span className={`text-xs font-mono w-10 text-right ${theme.textUltraMuted}`}>{formatTime(liveProgress)}</span>
                 <input type="range" min="0" max={LIVE_DURATION} value={liveProgress} readOnly className={`w-full h-1.5 rounded-lg appearance-none pointer-events-none opacity-80 ${highContrast ? 'bg-zinc-700 accent-yellow-400' : 'bg-stone-300 accent-[#1C3D5A]'}`} />
                 <span className={`text-xs font-mono w-10 text-left ${theme.textUltraMuted}`}>{formatTime(LIVE_DURATION)}</span>
               </div>
+
               <audio ref={liveAudioRef} src={getLiveAudioSrc()} preload="auto" />
             </div>
           ) : (
@@ -717,11 +718,9 @@ export default function App() {
         <span className="text-3xl">🤖</span>
       </button>
 
-      {/* ВИДЖЕТ ЧАТА С ВКЛАДКАМИ */}
+      {/* ВИДЖЕТ ЧАТА */}
       {isChatOpen && (
         <div className={`fixed bottom-24 left-4 md:bottom-28 md:left-8 z-[100] w-[90%] sm:w-[400px] h-[500px] min-w-[280px] min-h-[300px] max-w-[95vw] max-h-[85vh] resize overflow-hidden flex flex-col shadow-2xl transition-shadow rounded-3xl ${theme.panel}`}>
-
-          {/* Вкладки */}
           <div className={`flex items-center gap-1 px-2 pt-2 border-b overflow-x-auto ${theme.border}`}>
             {chatTabs.map(tab => (
               <div key={tab.id} onClick={() => setActiveTabId(tab.id)} className={`flex items-center gap-1 px-3 py-1.5 rounded-t-lg text-xs font-bold cursor-pointer whitespace-nowrap transition-all flex-shrink-0 ${tab.id === activeTabId ? (highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white') : (highContrast ? 'bg-zinc-800 text-yellow-400 hover:bg-zinc-700' : 'bg-stone-100 text-stone-500 hover:bg-stone-200')}`}>
@@ -731,8 +730,6 @@ export default function App() {
             ))}
             <button onClick={addNewTab} className={`flex-shrink-0 px-2 py-1.5 rounded-t-lg text-base font-bold transition-all ${highContrast ? 'text-yellow-400 hover:bg-zinc-800' : 'text-stone-400 hover:bg-stone-100 hover:text-[#1C3D5A]'}`} title={t.newChat}>＋</button>
           </div>
-
-          {/* Шапка */}
           <div className={`flex justify-between items-center px-4 py-3 border-b ${theme.border}`}>
             <h3 className={`font-bold flex items-center gap-2 ${tSize.sm} ${theme.textMain}`}><span className="text-lg">🤖</span> {t.chatTitle}</h3>
             <div className="flex items-center gap-2">
@@ -740,8 +737,6 @@ export default function App() {
               <button onClick={() => setIsChatOpen(false)} className={`text-xl font-bold opacity-60 hover:opacity-100 ${theme.textMain}`}>✕</button>
             </div>
           </div>
-
-          {/* Сообщения */}
           <div className={`flex-1 overflow-y-auto p-4 flex flex-col gap-3 ${highContrast ? 'bg-black' : 'bg-stone-50'}`}>
             {chatMessages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -755,8 +750,6 @@ export default function App() {
             )}
             <div ref={chatEndRef} />
           </div>
-
-          {/* Ввод */}
           <form onSubmit={handleSendMessage} className={`p-3 border-t flex gap-2 ${theme.panel}`}>
             <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder={t.chatInput} className={`flex-1 px-4 py-2 rounded-xl border outline-none ${tSize.sm} transition-colors ${highContrast ? 'bg-zinc-800 text-yellow-400 border-yellow-400 focus:bg-zinc-700 placeholder-yellow-600' : 'bg-white text-stone-800 border-stone-300 focus:border-[#1C3D5A]'}`} />
             <button type="submit" disabled={!chatInput.trim()} className={`p-2 px-4 rounded-xl font-bold transition-all ${!chatInput.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'} ${highContrast ? 'bg-yellow-400 text-black' : 'bg-[#1C3D5A] text-white'}`}>➤</button>
