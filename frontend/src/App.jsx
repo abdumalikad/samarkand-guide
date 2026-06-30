@@ -199,7 +199,7 @@ export default function App() {
   const [showFontSlider, setShowFontSlider] = useState(false);
   const [mapMode, setMapMode] = useState('2d'); // '2d' | '3d'
 
-  const LIVE_DURATION = 241;
+  const LIVE_DURATION = 236; // 3 minutes 56 seconds
 
   const [isLiveMode, setIsLiveMode] = useState(false);
   const [isAdminLive, setIsAdminLive] = useState(false);
