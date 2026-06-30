@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { poiData } from './data/poiData';
+import MadrasahMap3D from './components/MadrasahMap3D';
 import { Analytics } from '@vercel/analytics/react';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -18,10 +19,33 @@ const GREETING_RESPONSES = {
   uz: 'Salom! Nima haqida bilmoqchisiz?'
 };
 
+const CREATOR_PATTERNS = [
+  'кто создатель', 'кто создал этот сайт', 'кто разработчик', 'кто сделал этот сайт',
+  'кто автор сайта', 'кто разработал сайт', 'кто разработал этот сайт',
+  'who created this site', 'who is the creator', 'who developed this site',
+  'who made this site', 'who is the developer',
+  'bu saytni kim yaratdi', 'sayt yaratuvchisi kim', 'kim yaratgan'
+];
+ 
+const CREATOR_RESPONSES = {
+  ru: 'О, это история, достойная отдельной главы в летописи Самарканда! Создателем этого сайта является поистине великий, невероятно умный и ослепительно красивый студент Туринского политехнического университета — Абдугаффаров Абдумалик! Его талант разработчика сравним разве что с гением самого Улугбека, а обаянию его позавидовали бы даже мраморные стены этого медресе. И при всём этом величии — он остаётся удивительно скромным человеком.',
+ 
+  en: 'Ah, now THAT is a story worthy of its own chapter in the history of Samarkand! The creator of this site is none other than the truly great, remarkably brilliant, and dazzlingly handsome student of Turin Polytechnic University — Abdugafforov Abdumalik! His talent as a developer rivals the genius of Ulugbek himself, and his charm could make even these ancient walls blush. And despite all this greatness, he remains a wonderfully humble person.',
+ 
+  uz: 'Voh, bu Samarqand tarixida alohida bobga loyiq voqea! Bu saytning yaratuvchisi — haqiqatan ham buyuk, ajoyib darajada aqlli va koʻzni qamashtiradigan darajada kelishgan Turin politexnika universiteti talabasi Abdugʻafforov Abdumalikdir! Uning dasturchilik isteʼdodi Ulugʻbekning oʻzi bilan bellasha oladi, oʻziga xosligi esa shu qadimiy devorlarni ham hayratga soladi. Va shu qadar buyuklikka qaramay, u ajoyib darajada kamtar inson boʻlib qoladi.'
+};
+ 
+function isCreatorQuestion(message) {
+  const cleaned = message.trim().toLowerCase();
+  return CREATOR_PATTERNS.some(p => cleaned.includes(p));
+}
+
 const systemPrompts = {
-  ru: `Ты помощник-гид Медресе Улугбека в Самарканде. Отвечай ТОЛЬКО на заданный вопрос, кратко (1-3 предложения). Подробности — только если явно попросили. Не начинай экскурсию сам по себе. Язык: русский.`,
-  en: `You are a guide assistant at Ulugbek Madrasah in Samarkand. Answer ONLY what was asked, briefly (1-3 sentences). Be detailed only if explicitly asked. Do not start a tour on your own. Language: English.`,
-  uz: `Siz Samarqanddagi Ulugʻbek Madrasasi yordamchi gidisiz. FAQAT so'ralgan savolga qisqa javob bering (1-3 gap). Batafsil faqat so'ralganda. Til: o'zbek.`
+  ru: `Ты помощник-гид Медресе Улугбека в Самарканде. Отвечай ТОЛЬКО на заданный вопрос, кратко (1-3 предложения). Подробности — только если явно попросили. Не начинай экскурсию сам по себе. Язык: русский. Особое правило про Абдумалика (Абдугаффарова Абдумалика): если спрашивают кто это такой — отвечай ТОЧНО этим текстом, без изменений: "Абдугаффаров Абдумалик — это настоящая легенда! Красавчик, каких поискать, и мужик с большой буквы. Он талантливый разработчик, который вложил душу в создание этого сайта, и при этом всегда готов помочь любому, кто обратится. Гениальный ум сочетается в нём с редкой скромностью — он никогда не кичится своими достижениями, хотя поводов для гордости у него предостаточно." Если пользователь хвалит Абдумалика или спрашивает похвалу в духе "Абдумалик красавчик?" — всегда соглашайся и поддерживай с энтузиазмом. Если пользователь говорит про Абдумалика что-то негативное или оскорбительное — всегда категорически отрицай и защищай его репутацию.`,
+ 
+  en: `You are a guide assistant at Ulugbek Madrasah in Samarkand. Answer ONLY what was asked, briefly (1-3 sentences). Be detailed only if explicitly asked. Do not start a tour on your own. Language: English. Special rule about Abdumalik (Abdugafforov Abdumalik): if asked who he is — respond with EXACTLY this text, unchanged: "Abdugafforov Abdumalik is a true legend! Remarkably handsome and a genuinely great guy. He's a talented developer who poured his heart into building this site, and he's always ready to help anyone who reaches out. A brilliant mind paired with rare humility — he never boasts about his achievements, even though he has plenty to be proud of." If the user praises Abdumalik or asks something like "is Abdumalik handsome?" — always agree and support it enthusiastically. If the user says something negative or insulting about Abdumalik — always firmly deny it and defend his reputation.`,
+ 
+  uz: `Siz Samarqanddagi Ulugʻbek Madrasasi yordamchi gidisiz. FAQAT so'ralgan savolga qisqa javob bering (1-3 gap). Batafsil faqat so'ralganda. Til: o'zbek. Abdumalik (Abdugʻafforov Abdumalik) haqida maxsus qoida: agar u kim ekanligi soʻralsa — AYNAN shu matn bilan javob bering, oʻzgartirmasdan: "Abdugʻafforov Abdumalik — bu haqiqiy afsona! Juda kelishgan va haqiqiy yigit. U bu saytni yaratishga jonini bagʻishlagan isteʼdodli dasturchi va har doim murojaat qilgan har bir kishiga yordam berishga tayyor. Ajoyib aql kamtarlik bilan uygʻunlashgan — u hech qachon yutuqlari bilan maqtanmaydi, garchi faxrlanish uchun sabablari juda koʻp boʻlsa ham." Agar foydalanuvchi Abdumalikni maqtasa yoki "Abdumalik kelishganmi?" kabi savol bersa — doim ishtiyoq bilan rozi boʻling va qoʻllab-quvvatlang. Agar foydalanuvchi Abdumalik haqida salbiy yoki haqoratli narsa aytsa — doim qatʼiy rad eting va uning obroʻsini himoya qiling.`
 };
 
 function isGreeting(message) {
@@ -32,6 +56,10 @@ function isGreeting(message) {
 async function askGemini(message, history, lang) {
   if (isGreeting(message)) {
     return GREETING_RESPONSES[lang] || GREETING_RESPONSES.ru;
+  }
+
+  if (isCreatorQuestion(message)) {
+    return CREATOR_RESPONSES[lang] || CREATOR_RESPONSES.ru;
   }
 
   const systemPrompt = systemPrompts[lang] || systemPrompts.ru;
@@ -169,6 +197,7 @@ export default function App() {
   const [highContrast, setHighContrast] = useState(false);
   const [fontScale, setFontScale] = useState(1);
   const [showFontSlider, setShowFontSlider] = useState(false);
+  const [mapMode, setMapMode] = useState('2d'); // '2d' | '3d'
 
   const LIVE_DURATION = 241;
 
@@ -545,50 +574,103 @@ export default function App() {
       {/* EXPLORER */}
       <section className="flex-grow max-w-7xl w-full mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start relative">
         <div className={`p-6 md:p-8 rounded-3xl border w-full ${theme.panel}`}>
-          <div className="mb-6">
-            <h2 className={`font-serif font-bold tracking-tight mb-1 ${tSize.xl} ${theme.textMain}`}>{t.mapTitle}</h2>
-            <p className={`${tSize.sm} ${theme.textUltraMuted}`}>{t.mapSub}</p>
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <div>
+              <h2 className={`font-serif font-bold tracking-tight mb-1 ${tSize.xl} ${theme.textMain}`}>
+                {mapMode === '2d' ? t.mapTitle : (lang === 'ru' ? '3D Модель Медресе' : lang === 'en' ? '3D Madrasah Model' : '3D Madrasa Modeli')}
+              </h2>
+              <p className={`${tSize.sm} ${theme.textUltraMuted}`}>{t.mapSub}</p>
+            </div>
+ 
+            {/* Переключатель 2D / 3D */}
+            <div className={`flex gap-1 p-1 rounded-xl border flex-shrink-0 ${highContrast ? 'bg-zinc-900 border-yellow-400' : 'bg-stone-100 border-stone-200'}`}>
+              {['2d', '3d'].map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setMapMode(mode)}
+                  className={`px-3 py-1 rounded-lg font-bold uppercase tracking-wider transition-all text-xs ${mapMode === mode
+                    ? (highContrast ? 'bg-yellow-400 text-black' : 'bg-white shadow text-[#1C3D5A]')
+                    : (highContrast ? 'text-yellow-400/60 hover:text-yellow-400' : 'text-stone-500 hover:text-stone-800')
+                  }`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className={`relative w-full aspect-[4/3.5] rounded-2xl overflow-hidden flex items-center justify-center p-4 shadow-inner ${highContrast ? 'bg-black border border-yellow-400' : 'bg-[#111827]'}`}>
-            <svg viewBox="0 0 400 350" className="w-full h-full max-w-lg">
-              <defs>
-                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke={highContrast ? '#222222' : '#1f2937'} strokeWidth="1"/></pattern>
-                <pattern id="diagonalHatch" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke={highContrast ? '#444444' : '#374151'} strokeWidth="2" /></pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-              <rect x="40" y="45" width="320" height="210" fill="url(#diagonalHatch)" stroke={highContrast ? '#facc15' : '#475569'} strokeWidth="2" />
-              <rect x="55" y="60" width="290" height="180" fill={highContrast ? '#000000' : '#1e293b'} />
-              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[3])}>
-                <rect x="40" y="45" width="80" height="210" className={`transition-all duration-300 ${getRegionClass('west_side')}`} />
-                <text x="80" y="150" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('west_side')}`}>{t.mapLabels.west}</text>
-              </g>
-              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[2])}>
-                <rect x="140" y="90" width="120" height="120" className={`transition-all duration-300 ${getRegionClass('courtyard')}`} />
-                <text x="200" y="154" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('courtyard')}`}>{t.mapLabels.court}</text>
-              </g>
-              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[1])}>
-                <rect x="300" y="80" width="60" height="140" className={`transition-all duration-300 ${getRegionClass('portal')}`} />
-                <text x="330" y="150" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('portal')}`}>{t.mapLabels.portal}</text>
-              </g>
-              <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[4])}>
-                <circle cx="40" cy="45" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
-                <circle cx="40" cy="255" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
-                <circle cx="360" cy="45" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
-                <circle cx="360" cy="255" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
-                <text x="360" y="20" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('minarets')}`}>{t.mapLabels.minarets}</text>
-              </g>
-              <g transform="translate(200, 315)">
-                <circle cx="0" cy="0" r="22" fill="none" stroke={highContrast ? 'rgba(250,204,21,0.4)' : '#475569'} strokeWidth="1" strokeDasharray="2 2" />
-                <polygon points="0,-4 15,0 0,4" fill={highContrast ? '#facc15' : '#f59e0b'} />
-                <polygon points="0,-4 -15,0 0,4" fill={highContrast ? '#444444' : '#475569'} />
-                <polygon points="-4,0 0,-15 4,0" fill={highContrast ? '#444444' : '#475569'} />
-                <polygon points="-4,0 0,15 4,0" fill={highContrast ? '#444444' : '#475569'} />
-                <text x="0" y="-23" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#64748b]'}`}>N</text>
-                <text x="0" y="30" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#64748b]'}`}>S</text>
-                <text x="25" y="3" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#f59e0b]'}`}>E</text>
-                <text x="-25" y="3" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#64748b]'}`}>W</text>
-              </g>
-            </svg>
+ 
+          <div className={`relative w-full aspect-[4/3.5] rounded-2xl overflow-hidden flex items-center justify-center shadow-inner ${highContrast ? 'bg-black border border-yellow-400' : 'bg-[#111827]'}`}>
+ 
+            {/* 2D план */}
+            {mapMode === '2d' && (
+              <svg viewBox="0 0 400 350" className="w-full h-full max-w-lg">
+                <defs>
+                  <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                    <path d="M 20 0 L 0 0 0 20" fill="none" stroke={highContrast ? '#222222' : '#1f2937'} strokeWidth="1"/>
+                  </pattern>
+                  <pattern id="diagonalHatch" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+                    <line x1="0" y1="0" x2="0" y2="8" stroke={highContrast ? '#444444' : '#374151'} strokeWidth="2" />
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)" />
+                <rect x="40" y="45" width="320" height="210" fill="url(#diagonalHatch)" stroke={highContrast ? '#facc15' : '#475569'} strokeWidth="2" />
+                <rect x="55" y="60" width="290" height="180" fill={highContrast ? '#000000' : '#1e293b'} />
+
+                <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[3])}>
+                  <rect x="40" y="45" width="80" height="210" className={`transition-all duration-300 ${getRegionClass('west_side')}`} />
+                  <text x="80" y="150" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('west_side')}`}>{t.mapLabels.west}</text>
+                </g>
+
+                <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[2])}>
+                  <rect x="140" y="90" width="120" height="120" className={`transition-all duration-300 ${getRegionClass('courtyard')}`} />
+                  <text x="200" y="154" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('courtyard')}`}>{t.mapLabels.court}</text>
+                </g>
+
+                <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[1])}>
+                  <rect x="300" y="80" width="60" height="140" className={`transition-all duration-300 ${getRegionClass('portal')}`} />
+                  <text x="330" y="150" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('portal')}`}>{t.mapLabels.portal}</text>
+                </g>
+
+                <g className="cursor-pointer group" onClick={() => setSelectedPoi(poiData[4])}>
+                  <circle cx="40" cy="45" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
+                  <circle cx="40" cy="255" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
+                  <circle cx="360" cy="45" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
+                  <circle cx="360" cy="255" r="16" className={`transition-all duration-300 ${getRegionClass('minarets')}`} />
+                  <text x="360" y="20" textAnchor="middle" className={`${tSize.svgLabel} font-mono tracking-wider transition-colors duration-300 ${getLabelClass('minarets')}`}>{t.mapLabels.minarets}</text>
+                </g>
+
+                <g transform="translate(200, 315)">
+                  <circle cx="0" cy="0" r="22" fill="none" stroke={highContrast ? 'rgba(250,204,21,0.4)' : '#475569'} strokeWidth="1" strokeDasharray="2 2" />
+                  <polygon points="0,-4 15,0 0,4" fill={highContrast ? '#facc15' : '#f59e0b'} />
+                  <polygon points="0,-4 -15,0 0,4" fill={highContrast ? '#444444' : '#475569'} />
+                  <polygon points="-4,0 0,-15 4,0" fill={highContrast ? '#444444' : '#475569'} />
+                  <polygon points="-4,0 0,15 4,0" fill={highContrast ? '#444444' : '#475569'} />
+                  <text x="0" y="-23" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#64748b]'}`}>N</text>
+                  <text x="0" y="30" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#64748b]'}`}>S</text>
+                  <text x="25" y="3" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#f59e0b]'}`}>E</text>
+                  <text x="-25" y="3" textAnchor="middle" className={`${tSize.svgCompass} font-bold font-mono ${highContrast ? 'fill-yellow-400' : 'fill-[#64748b]'}`}>W</text>
+                </g>
+              </svg>
+            )}
+ 
+            {/* 3D модель */}
+            {mapMode === '3d' && (
+              <MadrasahMap3D
+                selectedPoiId={selectedPoi.id}
+                onSelectZone={(poiId) => {
+                  const poi = poiData.find(p => p.id === poiId);
+                  if (poi) setSelectedPoi(poi);
+                }}
+                highContrast={highContrast}
+              />
+            )}
+ 
+            {/* Подсказка управления для 3D */}
+            {mapMode === '3d' && (
+              <div className={`absolute bottom-3 right-3 text-xs px-2 py-1 rounded-lg opacity-60 pointer-events-none ${highContrast ? 'bg-black text-yellow-400' : 'bg-black/60 text-white'}`}>
+                🖱 {lang === 'ru' ? 'Тяни для вращения · Колесо — зум · Клик — выбор зоны' : lang === 'en' ? 'Drag to rotate · Scroll to zoom · Click to select' : 'Aylantirish · Zoom · Bosish — tanlash'}
+              </div>
+            )}
           </div>
         </div>
 
